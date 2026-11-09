@@ -53,6 +53,7 @@ int mxdirt_session_set_rolling_bumps(MxdirtSession *,float percent);
 int mxdirt_session_set_extra_riders(MxdirtSession *,unsigned riders);
 /* Live wear of each pass shared over 1..8 lines riding with the player (1 = one groove). */
 int mxdirt_session_set_live_gate(MxdirtSession *,unsigned lines);
+int mxdirt_session_set_live_wear(MxdirtSession *,float percent); /* 0 Low .. 100 Medium .. 200 */
 int mxdirt_session_dirt_moisture_now(const MxdirtSession *,float *out);
 /* [0] net volume error m^3, [1] cut, [2] compacted, [3] roost, [4] dust, [5] avalanche moves. */
 int mxdirt_session_dirt_sim_stats(const MxdirtSession *,double out[6]);

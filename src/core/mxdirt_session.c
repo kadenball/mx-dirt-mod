@@ -5,6 +5,7 @@
 #include "mxb_soil_sim.h"
 #include "mxb_soil_prewear.h"
 #include "mxb_soil_live_gate.h"
+#include "mxb_soil_live_wear.h"
 #include "mxdirt_soil_evolution.h"
 #include "mxdirt_soft_layer.h"
 
@@ -25,6 +26,7 @@ struct MxdirtSession {
     float bias_floor_m;            /* washboard trough bound for live passes (scales with erode) */
     unsigned extra_riders;         /* extra riders replaying each real contact on spread lines (test/busy-track mode) */
     MxbLiveGate gate;              /* live gate share (mxb_soil_live_gate.h) */
+    MxbLiveWear wear;              /* live wear level: Low 0 / Medium 1 (mxb_soil_live_wear.h) */
     int force_publish;             /* cells marked for resend (adopted tiles) */
     /* Real tyre contacts of the last completed step, for lap recording. */
     MxbDirtGhostSample live[2];int live_ok[2];
@@ -89,13 +91,13 @@ static float bump_factor(const MxdirtSession *s,const MxdirtContact *i,MxbBumpSt
        ground (rollers / washboard), so the floor is rolling_bumps (default .6). */
     float brk,ef,stress=mxb_bump_stress(&b->sit,dt,speed,slip,i->center_velocity[0],i->center_velocity[2],y,0,s->rolling_bumps,&brk,&ef);
     float dn=s->sim?fmaxf(.3f,fminf(2.5f,s->sim->p.depth_scale/.5f)):1.f;
-    *bias=-.021f*dn*(s->bump_gain/.30f)*stress*swing*(1.f+2.f*brk); /* .6x - the player's own line kept growing pits */
-    /* one pass deepens a bump dip by at most 1.2 cm (x erode): a single hard braking hit on
-       fresh dirt dug an instant pothole; real braking bumps grow a little with every pass */
-    {const float cap=.012f*dn;if(*bias<-cap)*bias=-cap;if(*bias>cap)*bias=cap;} /* braking hits 3x (see mxb_soil_live_gate.h) */
-    *floor=s->bias_floor_m*(1.f+10.5f*brk)*fminf(ef,1.8f); /* live braking troughs up to 3x the pre-wear's depth limit (.04+.42 brk) */
+    /* .6x - the player's own line kept growing pits. One pass deepens a bump dip by at most
+       1.2 cm (x erode, x the live wear level): a single hard braking hit on fresh dirt dug an
+       instant pothole; real braking bumps grow a little with every pass */
+    *bias=mxb_live_wear_bias(&s->wear,-.021f*dn*(s->bump_gain/.30f)*stress*swing*(1.f+2.f*brk),dn); /* braking hits 3x (see mxb_soil_live_gate.h) */
+    *floor=mxb_live_wear_floor(&s->wear,s->bias_floor_m*(1.f+10.5f*brk)*fminf(ef,1.8f)); /* live braking troughs up to 3x the pre-wear's depth limit (.04+.42 brk) */
     b->gs=stress*(MXB_PW_ROLLING/.6f);b->gb=brk;b->ge=ef; /* gate lines use the pre-wear rolling stress */
-    return 1.f+(s->bump_gain+.3f*brk)*fminf(stress,1.5f)*swing;
+    return mxb_live_wear_gain(&s->wear,1.f+(s->bump_gain+.3f*brk)*fminf(stress,1.5f)*swing);
 }
 static int owned(const MxdirtSession *s) {
     return s&&s->owner==GetCurrentThreadId()&&!s->faulted&&!s->in_callback;
@@ -378,6 +380,11 @@ int mxdirt_session_set_live_gate(MxdirtSession *s,unsigned lines){
     if(!owned(s)||!s->sim||lines<1||lines>MXB_LIVE_GATE_MAX)return 0;
     mxb_live_gate_init(&s->gate,lines,0x51ed270bu);return 1;
 }
+/* percent 0..200: 0 = Low (1.1.0 live wear), 100 = Medium (~15 laps = Practice pre-wear) */
+int mxdirt_session_set_live_wear(MxdirtSession *s,float percent){
+    if(!owned(s)||!isfinite(percent)||percent<0.f||percent>200.f)return 0;
+    mxb_live_wear_init(&s->wear,percent/100.f);return 1;
+}
 int mxdirt_session_set_extra_riders(MxdirtSession *s,unsigned riders){
     if(!fresh(s)||!s->sim||riders>15)return 0;
     s->extra_riders=riders;return 1;
@@ -436,7 +443,7 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
         float cut=s->soil?soil_step.feedback[w].cut:1.f;
         if(s->bump_gain>0.f){
             if(s->priming)bumps[w].valid=0;
-            else cut=fmaxf(.75f,fminf(1.3f,cut*bump_factor(s,&input[w],&bumps[w],&biases[w],&floors[w])));
+            else cut=mxb_live_wear_clamp(&s->wear,cut*bump_factor(s,&input[w],&bumps[w],&biases[w],&floors[w]));
         }
         gains[w]=cut;
     }
@@ -447,7 +454,7 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
         s->live_ok[w]=0;
         if(s->priming){s->sim->has_last[w]=0;continue;}
         MxbSoilSimWheel sw;sim_wheel(s,&input[w],w,gains[w],&sw);sw.material=material[w];sw.floor_bias=biases[w];sw.bias_floor=floors[w]>0.f?floors[w]:s->bias_floor_m;sw.turn=bumps[w].valid?mxb_bump_turn(&bumps[w].sit):0.f;sw.brake=bumps[w].valid?fmaxf(bumps[w].gb,fminf(1.f,fmaxf(0.f,(-sw.slip_long/fmaxf(sw.speed,1.f)-.10f)/.65f))):0.f; /* braking or hard on the gas */sw.impact=bumps[w].valid&&bumps[w].sit.since<.25f?1.f-bumps[w].sit.since/.25f:0.f;
-        {const float d0=s->sim->p.depth_scale;s->sim->p.depth_scale=d0*(s->bump_gain>0.f?mxb_live_gate_share(&s->gate,1):1.f); /* this pass's wear shared over the gate lines */
+        {const float d0=s->sim->p.depth_scale;s->sim->p.depth_scale=d0*(s->bump_gain>0.f?mxb_live_gate_share(&s->gate,1):1.f)*mxb_live_wear_depth(&s->wear); /* this pass's wear shared over the gate lines */
          mxb_soil_sim_wheel(s->sim,(unsigned)w,&sw);
          if(s->bump_gain>0.f)mxb_live_gate_wheel(s->sim,&s->gate,(unsigned)w,&sw,bumps[w].gs,bumps[w].gb,bumps[w].ge,bumps[w].landed);
          s->sim->p.depth_scale=d0;}

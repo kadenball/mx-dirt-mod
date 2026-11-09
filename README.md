@@ -179,6 +179,9 @@ Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bike
   - End of day (80)
   - Destroyed (130)
 - **Wear spread:** how far the virtual riders spread from your lines. Lower gives fewer, deeper lines.
+- **Wear from your laps:** how fast your own riding wears the track.
+  - Medium (default): about 15 of your laps wear a track like the Practice level.
+  - Low: slow, realistic one-rider wear. Your line packs in and bumps stay small.
 - **Dirt:** rut depth, track firmness, moisture, rolling bumps, lines riding with you, and the soft dirt layer thickness.
 - **Look:** dirt look strength and distance, dirt shading on/off, tyre marks on/off.
 - **Record my laps:** needed for pre-wear.
@@ -213,6 +216,7 @@ All settings live in two text files in `MX Bikes\plugins`, with comments. The la
 | `sharp_ruts` | 0 | 0/1 | Sharper ruts; diagonal ruts can show teeth. |
 | `braking_bumps_percent` | 100 | 0–200 | Braking bumps and bump stress. |
 | `rolling_bumps_percent` | 60 | 0–100 | Bumps without braking or gas. |
+| `live_wear_percent` | 100 | 0–200 | How much each of your laps wears the track. 100 = Medium (~15 laps = Practice), 0 = Low. |
 | `live_gate_lines` | 1 | 1–8 | Your live wear shared over N nearby lines. |
 | `extra_riders` | 0 | 0–15 | Test mode: extra riders copy each of your contacts. |
 | `record_ghosts` | 1 | 0/1 | Record your laps. |
@@ -372,7 +376,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.1.0   # both + the release zip in build\
+.\package.ps1 -Version 1.2.0   # both + the release zip in build\
 ```
 
 Source layout:

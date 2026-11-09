@@ -49,6 +49,8 @@ function Game-Running { [bool](Get-Process -Name mxbikes -ErrorAction SilentlyCo
 
 # ---- settings: [file, section, key, label, min, max, recommended, tip] ----
 $WearLevels=[ordered]@{ 'Off (fresh track)'=0; 'Practice'=25; 'After moto 1 (Pro look)'=50; 'End of day'=80; 'Destroyed'=130 }
+# live_wear_percent: how much each of your own laps wears the track
+$LiveLevels=[ordered]@{ 'Low (slow, realistic)'=0; 'Medium (default)'=100 }
 $Num=@(
   @('active','soil','prewear_spread_cm','Wear spread across track (cm)',20,500,140,'How far the virtual riders spread from your lines. Lower = fewer, deeper main lines.'),
   @('active','soil','dirt_sim_depth_percent','Rut depth (%)',10,300,60,'How deep tyres cut. Also follows the game''s erode slider.'),
@@ -89,9 +91,14 @@ $tip.SetToolTip($enabled,'Off = MX Bikes runs completely vanilla (the dirt plugi
 Header 'Track wear when a track loads'
 $wear=New-Object Windows.Forms.ComboBox;$wear.DropDownStyle='DropDownList';$wear.Width=220
 foreach($k in $WearLevels.Keys){[void]$wear.Items.Add($k)}
+$live=New-Object Windows.Forms.ComboBox;$live.DropDownStyle='DropDownList';$live.Width=220
+foreach($k in $LiveLevels.Keys){[void]$live.Items.Add($k)}
 Row 'Starting wear' $wear 'Virtual riders ride your recorded laps before you start. "After moto 1" matches the Maryland Pro track. Needs at least one recorded lap on the track. A track with saved wear keeps it - reset the track to wear it again at a new level.'
 $ctl=@{}
-foreach($n in $Num){ if($n[1] -eq 'renderer' -and -not $hdrR){ Header 'Look'; $hdrR=$true } elseif($n[2] -eq 'dirt_sim_depth_percent'){ Header 'Dirt' }
+foreach($n in $Num){ if($n[1] -eq 'renderer' -and -not $hdrR){ Header 'Look'; $hdrR=$true } elseif($n[2] -eq 'dirt_sim_depth_percent'){
+        Header 'Wear while you ride'
+        Row 'Wear from your laps' $live 'How fast your own riding wears the track. Medium: about 15 of your laps wear it like the Practice level. Low: slow one-rider wear, your line packs in and bumps stay small.'
+        Header 'Dirt' }
     $u=New-Object Windows.Forms.NumericUpDown;$u.Minimum=$n[4];$u.Maximum=$n[5];$u.Width=80;$ctl[$n[2]]=$u;Row $n[3] $u $n[7] }
 foreach($c in $Chk){ $b=New-Object Windows.Forms.CheckBox;$b.Text=$c[3];$b.AutoSize=$true;$ctl[$c[2]]=$b;$tbl.Controls.Add($b);$tbl.SetColumnSpan($b,2) }
 
@@ -122,6 +129,10 @@ function Load-All {
     $name=($WearLevels.Keys | Where-Object { $WearLevels[$_] -eq $r } | Select-Object -First 1)
     if(-not $name){ $name="Custom ($r riders)"; if(-not $wear.Items.Contains($name)){[void]$wear.Items.Add($name)} }
     $wear.SelectedItem=$name
+    $lv=[int](Get-Val $L.active 'soil' 'live_wear_percent' '100')
+    $ln=($LiveLevels.Keys | Where-Object { $LiveLevels[$_] -eq $lv } | Select-Object -First 1)
+    if(-not $ln){ $ln="Custom ($lv %)"; if(-not $live.Items.Contains($ln)){[void]$live.Items.Add($ln)} }
+    $live.SelectedItem=$ln
     foreach($n in $Num){ $v=[int](Get-Val $L[$n[0]] $n[1] $n[2] "$($n[6])"); $ctl[$n[2]].Value=[Math]::Max($n[4],[Math]::Min($n[5],$v)) }
     foreach($c in $Chk){ $ctl[$c[2]].Checked=(Get-Val $L[$c[0]] $c[1] $c[2] "$($c[4])") -eq '1' }
     Load-Tracks; Update-Status }
@@ -138,6 +149,8 @@ function Save-All {
     Set-Val $L.active 'active' 'enabled' $on; Set-Val $L.renderer 'renderer' 'enabled' $on; if($L.ld){ Set-Val $L.ld 'mod' 'enabled' $on }
     $r=if($WearLevels.Contains("$($wear.SelectedItem)")){$WearLevels["$($wear.SelectedItem)"]}else{[int]("$($wear.SelectedItem)" -replace '\D','')}
     Set-Val $L.active 'soil' 'prewear_riders' "$r"
+    $lw=if($LiveLevels.Contains("$($live.SelectedItem)")){$LiveLevels["$($live.SelectedItem)"]}else{[int]("$($live.SelectedItem)" -replace '\D','')}
+    Set-Val $L.active 'soil' 'live_wear_percent' "$lw"
     foreach($n in $Num){ Set-Val $L[$n[0]] $n[1] $n[2] "$([int]$ctl[$n[2]].Value)" }
     # the renderer drops its dirt pass unless start < end <= 60
     $end=[int]$ctl['dirt_fade_end'].Value; Set-Val $L.renderer 'renderer' 'dirt_fade_start' "$([Math]::Max(5,[int]($end*.75)))"
@@ -150,7 +163,7 @@ function Save-All {
         $script:LoadedRiders=$r
         if([Windows.Forms.MessageBox]::Show("Tracks you already rode keep their saved wear.`n`nReset '$($track.SelectedItem)' so it starts at the new level?",'New wear level','YesNo','Question') -eq 'Yes'){ Reset-Track $false } } }
 
-function Apply-Recommended { $wear.SelectedItem='After moto 1 (Pro look)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
+function Apply-Recommended { $wear.SelectedItem='After moto 1 (Pro look)'; $live.SelectedItem='Medium (default)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
     $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Recommended settings filled in - press Save.' }
 $rec.Add_Click({ Apply-Recommended })
 $save.Add_Click({ try{ Save-All }catch{ [Windows.Forms.MessageBox]::Show("Could not save:`n$($_.Exception.Message)",'MX Dirt Mod','OK','Error') | Out-Null } })
@@ -170,7 +183,7 @@ Load-All
 if($SelfTest){
     # exercise load -> save on whatever $GameDir points at (use a copy), then report what was written
     $enabled.Checked=$false; $wear.SelectedItem='Practice'; $ctl['prewear_spread_cm'].Value=140; Save-All
-    $L2=Read-Lines $Ini.active; "active.enabled=$(Get-Val $L2 'active' 'enabled' '?') riders=$(Get-Val $L2 'soil' 'prewear_riders' '?') spread=$(Get-Val $L2 'soil' 'prewear_spread_cm' '?')"
+    $L2=Read-Lines $Ini.active; "active.enabled=$(Get-Val $L2 'active' 'enabled' '?') riders=$(Get-Val $L2 'soil' 'prewear_riders' '?') live_wear=$(Get-Val $L2 'soil' 'live_wear_percent' '?') spread=$(Get-Val $L2 'soil' 'prewear_spread_cm' '?')"
     $R2=Read-Lines $Ini.renderer; "renderer.enabled=$(Get-Val $R2 'renderer' 'enabled' '?') fade=$(Get-Val $R2 'renderer' 'dirt_fade_start' '?')..$(Get-Val $R2 'renderer' 'dirt_fade_end' '?')"
     "layout=$(if($Ini.ld){'dev'}else{'release'}) tracks=$($track.Items.Count)"
     $f.Dispose(); return }

@@ -82,7 +82,7 @@ static RaGeometry ra_geom;static int ra_geom_valid;
 static unsigned ra_dirt_sim_depth=60,ra_dirt_sim_firmness=55,ra_dirt_sim_moisture=35;
 static unsigned ra_bumps_percent=100,ra_rolling_bumps_percent=60;
 static unsigned ra_hardness_percent=100,ra_breakdown_percent=100,ra_drying_percent=100,ra_sweep_percent=100;
-static unsigned ra_extra_riders=0,ra_live_gate=1;
+static unsigned ra_extra_riders=0,ra_live_gate=1,ra_live_wear=100;
 /* sharp_ruts (vertex-exact publication) is opt-in: the native mesh's fixed
    triangle split turns narrow ruts running along one diagonal into teeth. */
 static unsigned ra_sharp_ruts=0,ra_capture_percent=100,ra_cohesion_percent=100,ra_clods_percent=100;static int ra_sharp_live;
@@ -485,7 +485,7 @@ static int ra_setup(void) {
     !mxdirt_session_set_dirt_response(ra_session,(float)ra_hardness_percent,(float)ra_breakdown_percent)||
     !mxdirt_session_set_dirt_weather(ra_session,(float)ra_drying_percent,(float)ra_sweep_percent)||
     !mxdirt_session_set_dirt_shape(ra_session,(float)ra_capture_percent,(float)ra_cohesion_percent,(float)ra_clods_percent)||
-    !mxdirt_session_set_extra_riders(ra_session,ra_extra_riders)||!mxdirt_session_set_live_gate(ra_session,ra_live_gate)){
+    !mxdirt_session_set_extra_riders(ra_session,ra_extra_riders)||!mxdirt_session_set_live_gate(ra_session,ra_live_gate)||!mxdirt_session_set_live_wear(ra_session,(float)ra_live_wear)){
   ra_solver_destroy();goto end;
  }
  stage="grid_changed";
@@ -900,6 +900,7 @@ API int Startup(char *savepath) {
     !ra_ini_uint("soil","record_ghosts",1,0,1,&ra_record_ghosts)||
     !ra_ini_uint("soil","follow_game_deformation",1,0,1,&ra_follow_game_deformation)||
     !ra_ini_uint("soil","game_deformation_reference_percent",25,1,200,&ra_game_deformation_reference)||
+    !ra_ini_uint("soil","live_wear_percent",100,0,200,&ra_live_wear)||
     !ra_ini_uint("debug","dump_terrain",0,0,1,&dump))return -1;
  ra_dump_terrain=dump;
  ra_live_gate=GetPrivateProfileIntA("soil","live_gate_lines",1,ra_ini);if(ra_live_gate<1||ra_live_gate>8)ra_live_gate=1;
@@ -909,9 +910,9 @@ API int Startup(char *savepath) {
  LARGE_INTEGER frequency;QueryPerformanceFrequency(&frequency);
  fprintf(ra_log,"{\"active\":true,\"kind\":\"startup\",\"plugin\":\"mx_dirt\",\"schema\":1,\"qpc_frequency\":%lld,\"exe_sha256\":\"%s\",\"load_tau_s\":%.3g,\"height_response\":%.3g}\n",
   frequency.QuadPart,ra_verified_hash,(double)MXDIRT_LOAD_TAU_S,(double)RA_HEIGHT_RESPONSE);
- fprintf(ra_log,"{\"kind\":\"config\",\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"packed_hardness_percent\":%u,\"breakdown_percent\":%u,\"drying_percent\":%u,\"sweep_percent\":%u,\"sharp_ruts\":%u,\"rut_capture_percent\":%u,\"wall_cohesion_percent\":%u,\"roost_clods_percent\":%u,\"prewear_riders\":%u,\"prewear_spread_cm\":%u,\"prewear_clip_cm\":%u,\"prewear_fresh_only\":%u,\"soft_layer_mm\":%u,\"extra_riders\":%u,\"live_gate_lines\":%u,\"ghost_riders\":%u,\"record_ghosts\":%u,\"follow_game_deformation\":%u,\"game_deformation_reference_percent\":%u,\"sand_tracks\":\"%s\",\"dump_terrain\":%u}\n",
+ fprintf(ra_log,"{\"kind\":\"config\",\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"packed_hardness_percent\":%u,\"breakdown_percent\":%u,\"drying_percent\":%u,\"sweep_percent\":%u,\"sharp_ruts\":%u,\"rut_capture_percent\":%u,\"wall_cohesion_percent\":%u,\"roost_clods_percent\":%u,\"prewear_riders\":%u,\"prewear_spread_cm\":%u,\"prewear_clip_cm\":%u,\"prewear_fresh_only\":%u,\"soft_layer_mm\":%u,\"extra_riders\":%u,\"live_gate_lines\":%u,\"live_wear_percent\":%u,\"ghost_riders\":%u,\"record_ghosts\":%u,\"follow_game_deformation\":%u,\"game_deformation_reference_percent\":%u,\"sand_tracks\":\"%s\",\"dump_terrain\":%u}\n",
   ra_dirt_sim_depth,ra_dirt_sim_firmness,ra_dirt_sim_moisture,ra_bumps_percent,ra_rolling_bumps_percent,ra_hardness_percent,ra_breakdown_percent,ra_drying_percent,ra_sweep_percent,ra_sharp_ruts,ra_capture_percent,ra_cohesion_percent,ra_clods_percent,
-  ra_prewear_riders,ra_prewear_spread_cm,ra_prewear_clip_cm,ra_prewear_fresh_only,ra_soft_mm,ra_extra_riders,ra_live_gate,ra_ghost_riders,ra_record_ghosts,ra_follow_game_deformation,ra_game_deformation_reference,
+  ra_prewear_riders,ra_prewear_spread_cm,ra_prewear_clip_cm,ra_prewear_fresh_only,ra_soft_mm,ra_extra_riders,ra_live_gate,ra_live_wear,ra_ghost_riders,ra_record_ghosts,ra_follow_game_deformation,ra_game_deformation_reference,
   strchr(ra_sand_tracks,'"')||strchr(ra_sand_tracks,'\\')?"?":ra_sand_tracks,ra_dump_terrain);
  fflush(ra_log);
  return 3; /* telemetry is unused */
