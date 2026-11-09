@@ -1,0 +1,10 @@
+build/
+*.zip
+*.dll
+*.dlo
+*.pdb
+*.lib
+*.jsonl
+*.log
+__pycache__/
+
