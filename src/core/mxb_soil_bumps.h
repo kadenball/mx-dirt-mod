@@ -15,10 +15,13 @@
 #ifndef MXB_PW_ROLLING
 #define MXB_PW_ROLLING .15f /* pre-wear / gate-line rolling stress (live rolling_bumps is .6); v9.1 .22->.15: Pro is calm off the braking/gas zones */
 #endif
+#ifndef MXB_EXIT_CALM
+#define MXB_EXIT_CALM .5f
+#endif
 #ifndef MXB_BRAKE_K
 #define MXB_BRAKE_K 19.f
 #endif
-typedef struct{float f0,f1,cv,since,v,dec,gy,gs;int has_f;}MxbBumpSit; /* gy/gs: ground height and its smoothed slope along travel */
+typedef struct{float f0,f1,cv,since,v,dec,gy,gs,tdist;int has_f;}MxbBumpSit; /* tdist: m travelled since the last real turn */ /* gy/gs: ground height and its smoothed slope along travel */
 static inline float mxb_bump_clamp01(float v){return fminf(1.f,fmaxf(0.f,v));}
 /* v8.7: 0 straight .. 1 turning hard (path curvature > ~.12 /m), from the same tracker */
 static inline float mxb_bump_turn(const MxbBumpSit *b){return mxb_bump_clamp01((b->cv-.04f)/.08f);}
@@ -39,6 +42,7 @@ static inline float mxb_bump_stress(MxbBumpSit *b,float dt,float speed,float sl,
     /* path curvature (1/m) from the heading change, smoothed over ~.1 s */
     b->cv+=fminf(1.f,dt/.115f)*(fabsf(asinf(fmaxf(-1.f,fminf(1.f,cr))))/fmaxf(.05f,speed*dt)-b->cv);
     if(landed)b->since=0.f;else b->since+=dt;
+    if(b->cv>.08f)b->tdist=0.f;else b->tdist+=speed*dt;
     float cf=.15f+.85f*mxb_bump_clamp01((speed-7.f)/5.f);           /* slow: turning, not pitching */
     float tf=fmaxf(.1f,fminf(1.f,1.f-(b->cv-.04f)/.08f));           /* turning */
     float lf=fmaxf(.2f,fminf(1.f,(b->since-.15f)/.4f));             /* just landed (v7.9: Pro rows start ~8 m past touchdown) */
@@ -51,6 +55,10 @@ static inline float mxb_bump_stress(MxbBumpSit *b,float dt,float speed,float sl,
     /* calm under power only at corner-exit speeds: hard on the gas at 19+ m/s (out of a
        landing, up a fast straight) Pro has some of its biggest rows */
     float dsk=.8f*ds*(1.f-mxb_bump_clamp01((speed-9.f)/4.f)); /* v7.9: only true corner exits (Pro: big rows on the gas out of landings at ~15 m/s) */
-    return fmaxf(rolling*(1.f-dsk)*lf,MXB_BRAKE_K*rolling*brs)*cf*tf*ef;
+    /* v10 (1.3) corner exits: Pro stays smooth for ~30 m after a turn (riders drive out on a
+       settled bike; fast exits ~.8x the straights, run-ups straight out of a corner near clean),
+       its run-up bumps sit at the end of long fast straights instead */
+    float xf=1.f-MXB_EXIT_CALM*(1.f-mxb_bump_clamp01(b->tdist/30.f));
+    return fmaxf(rolling*(1.f-dsk)*lf,MXB_BRAKE_K*rolling*brs)*cf*tf*ef*xf;
 }
 #endif

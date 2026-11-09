@@ -146,6 +146,8 @@ Every tyre contact, every physics frame, works the soil under it:
   - The wheel's own bounce (fork, shock, tyre) decides where bumps form, the same way it does on a real track.
   - Braking rows get tallest. Hard acceleration builds chop.
   - Any hop makes small rollers.
+  - The first ~30 m after a corner stays calmer, like the Maryland Pro track: riders drive out on a settled bike.
+- **Jump faces route out:** ruts run up the face and through the lip at their run-up depth, as on the Pro track. No roost, pushed-up dirt or bump rows land on the face, so the lip never grows into a kicker.
 - **Landings** pack the ground rather than digging craters.
 - **Roost:** spinning tyres throw soil back as scattered clods.
 - **Moisture:** the track starts watered and dries out over a ride. Damp soil is darker, packs better and holds sharper ruts.

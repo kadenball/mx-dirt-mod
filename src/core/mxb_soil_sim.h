@@ -24,6 +24,12 @@
    terrain), so tyre-scale effects are cell averages (sub-cell coverage
    weights): volume, not peak shape, is what the grid can carry. */
 #include <math.h>
+#ifndef MXB_LIP_CARRY
+#define MXB_LIP_CARRY 1.f /* 1: grooves run through lips at their run-up depth (1.2: 0) */
+#endif
+#ifndef MXB_FACE_DEPTH
+#define MXB_FACE_DEPTH .2f /* share of the jump-face protection applied to rut depth (1.2: 1) */
+#endif
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -316,7 +322,7 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
     /* v9 row drive: braking and hard acceleration hit rows hardest, but rollers, landings and
        plain rolling build them too (user: not all of Pro's rows come from braking) */
     const float rowd=fmaxf(.4f*(1.f-fminf(1.f,fmaxf(0.f,w->turn))),w->brake); /* not in turns: corners keep the v7.5 ruts and berms */
-    float face=0.f,uphill=0.f;
+    float face=0.f,uphill=0.f,lipz=0.f; /* lipz: 0..1 within ~7 m of a real lip */
     if(s->base){ /* steeper of the 0.6 m slopes just behind and just ahead of the contact, so
                     the lip and the foot of a face count as face (a one-cell difference flickers 0..1;
                     a centred 1.2 m slope eased off at the lip, which then trenched into a kicker) */
@@ -348,12 +354,16 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
                    in over ~7 m: a groove that ends abruptly short of the lip is a kicker too */
                 float st=fminf(1.f,fmaxf(0.f,(rise/.6f-.10f)/.15f));face=fmaxf(face,.5f*lip*st);uphill=fmaxf(uphill,lip); /* v8.9: no bump rows / shoved crests anywhere on the ~11 m run-up to a real lip (they made sharp-edged mogul blocks on the approach; Pro is clean there) */
                 {float lipnear=fminf(1.f,fmaxf(0.f,1.f-((float)dfirst-1.f)/6.f)); /* 1 within ~2 m of the lip, 0 by ~7 m: face ruts fade out, no groove ends at a step */
-                 face=fmaxf(face,.95f*lip*lipnear);uphill=fmaxf(uphill,lip*lipnear);}}}}
+                 face=fmaxf(face,.95f*lip*lipnear);uphill=fmaxf(uphill,lip*lipnear);lipz=lip*lipnear;}}}}
     /* Faces are track-crew packed and get a fresh, compacting pass every lap: they
        cut ~30 % as deep (halving alone also halved packing, so faces stayed soft
        and still trenched as deep as flat ground in tests). */
     /* v8.4: faces and lips are crew-packed: fresh (soft) soil there sinks like packed dirt */
-    z*=1.f-.7f*fminf(1.f,face)*(1.f-ce);
+    /* v10 (1.3): ruts route through faces up to the lip as on Pro (faces rut ~6.6 cm there, deeper
+       than the run-up): the old fade toward the lip left a hump = rollers right before every take-off.
+       face (kicker guard) still keeps shove, roost digging and rows off the face. */
+    const float faced=MXB_FACE_DEPTH*face;
+    z*=1.f-.7f*fminf(1.f,faced)*(1.f-ce);
     z*=1.f+1.f*fminf(3.f,fmaxf(0.f,w->turn));
     /* v8.9: on a lip run-up (uphill = 1) the bump pulse in the dig strength is flattened too:
        it alone built sharp-edged mogul blocks right before take-offs */
@@ -370,8 +380,8 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
        Rows (floor_bias / row troughs) are not affected. */
     {float sx=-w->fwd[1]*1.2f,sz=w->fwd[0]*1.2f;
         float side=.5f*(mxb_ss_sample_m(s,X+sx,Z+sz)+mxb_ss_sample_m(s,X-sx,Z-sz)),deep=side-mxb_ss_m(s,k0);
-        {float sat=-.03f*w->brake+.065f+(.025f-.065f)*fminf(1.f,1.5f*face)+.04f*fminf(3.f,fmaxf(0.f,w->turn));z*=fminf(1.f,fmaxf(.1f,1.f-(deep-sat)/.06f));}}
-    float floor_m=surface_m-z*(1.f-.7f*face);
+        {float sat=-.03f*w->brake+.065f+(.025f-.065f)*fminf(1.f,1.5f*faced)+.04f*fminf(3.f,fmaxf(0.f,w->turn));z*=fminf(1.f,fmaxf(.1f,1.f-(deep-sat)/.06f));}}
+    float floor_m=surface_m-z*(1.f-.7f*faced);
     /* v7.5 washboard rows: the floor follows the wheel's load swing (floor_bias), but a
        trough may never go more than 4 cm below the smoothed local ground (+-1.6 m along
        travel) - unbounded, every pass cut the same trough deeper and a bike feeding its
@@ -380,9 +390,14 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
     const float fbias=.6f*w->floor_bias;
     if(fbias!=0.f){
         float ref=0.f;for(int k=-2;k<=2;k++)ref+=mxb_ss_sample_m(s,X+w->fwd[0]*.8f*(float)k,Z+w->fwd[1]*.8f*(float)k);ref*=.2f;
-        floor_m=fmaxf(floor_m+fbias*(1.f-face)*(1.f+1.5f*(1.f-ce)),ref-z*(1.f-.7f*face)-(w->bias_floor>0.f?w->bias_floor:.04f));
+        floor_m=fmaxf(floor_m+fbias*(1.f-face)*(1.f-MXB_LIP_CARRY*lipz)*(1.f+1.5f*(1.f-ce)),ref-z*(1.f-.7f*faced)-(w->bias_floor>0.f?w->bias_floor:.04f));
         row_ref=ref-(w->bias_floor>0.f?w->bias_floor:.04f);row_mean=ref;
     }
+    /* v10 (1.3) routed lips: up the last ~7 m to a lip the bike compresses at the foot of the face
+       (deeper cut) and unloads over the lip (shallower cut), so each pass left the lip standing
+       ~9 cm above its own groove - a kicker (Pro: ~3 cm). The groove floor may not rise along
+       travel there: the rut runs on through the lip, the way bikes route lips out. */
+    if(MXB_LIP_CARRY>0.f&&lipz>.3f&&s->has_last[wheel])floor_m=fminf(floor_m,s->last_floor[wheel]+.005f);
     if(pan>0.f&&floor_m<-pan)floor_m=fminf(surface_m,-pan);
 #ifdef MXB_SOIL_SIM_DEBUG
     MXB_SOIL_SIM_DEBUG(X,z,face,surface_m,floor_m);
