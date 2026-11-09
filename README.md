@@ -183,8 +183,10 @@ The wear goes into MX Bikes' terrain deformation, so the game's physics and your
   - It is thinner, and ironed flat, on packed lines.
   - Damp dirt holds crisp prints and tall lips; dry dirt crumbles.
   - Sand lies deep; hard-pack and gravel carry only a thin skin.
+  - Loose soil the simulation throws around (berms beside the line, soil shoved into bump rows, roost behind a spinning tyre) falls into the trenches and buries old prints. Untouched ground stays clean.
+  - The in-game Deformation slider scales it like the ruts (slider at 0: no layer).
 - Up close it's drawn with real depth (parallax) and its own shadows.
-- It's **a look only**: the bike rides the dirt simulation's ruts under it.
+- It's **a look only**: the bike rides the dirt simulation's ruts under it. The layer is drawn lying on top of that ridden ground, so a pressed trench floor is where the tyre actually rolls.
 - Its marks are saved with the track in `plugins\mx_dirt_soft\<track>\`.
 
 ### 5. Dirt look (`mx_dirt_render.dlo`)
@@ -422,7 +424,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.2.0   # both + the release zip in build\
+.\package.ps1 -Version 1.3.0   # both + the release zip in build\
 ```
 
 Source layout:

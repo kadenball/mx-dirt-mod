@@ -127,6 +127,10 @@ typedef struct {
        (metres from the terrain centre, ground speed, drive spin / brake skid 0..1) */
     void (*on_contact)(void *user,unsigned wheel,const MxbSoilSimWheel *w,float X,float Z,float v,float spin,float skid);
     void *on_contact_user;
+    /* optional: every band of loose soil the tyres drop (berms, shoved row crests, roost spray),
+       before it is spread over the grid - same arguments as mxb_ss_deposit (soft layer cover) */
+    void (*on_deposit)(void *user,float X,float Z,const float d[2],float a,float b,float w,float volume);
+    void *on_deposit_user;
 } MxbSoilSim;
 static inline MxbSoilSimParams mxb_soil_sim_defaults(void){
     MxbSoilSimParams p;
@@ -211,6 +215,7 @@ static inline float mxb_ss_rand(MxbSoilSim *s){uint32_t x=s->rng;x^=x<<13;x^=x>>
    metres along d, half-width w, spread over cells with a smooth profile. */
 static inline void mxb_ss_deposit(MxbSoilSim *s,float X,float Z,const float d[2],float a,float b,float w,float volume){
     if(!(volume>0.f))return;
+    if(s->on_deposit)s->on_deposit(s->on_deposit_user,X,Z,d,a,b,w,volume);
     float n[2]={-d[1],d[0]},ext=fmaxf(fabsf(a),fabsf(b))+w+s->cell_x*2;
     float c0,r0;mxb_ss_texel(s,X,Z,&c0,&r0);
     int span_c=(int)ceilf(ext/s->cell_x)+1,span_r=(int)ceilf(ext/s->cell_z)+1;

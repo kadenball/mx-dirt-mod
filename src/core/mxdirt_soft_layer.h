@@ -176,6 +176,44 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
         for(int j=0;j<4;j++){static const float o[4][2]={{1,0},{-1,0},{0,1},{0,-1}};mxd_soft_add(s,x+o[j][0]*s->cell,z+o[j][1]*s->cell,q*.125f,cap);}
     }
 }
+/* Loose soil the dirt sim drops on the ground (berms beside the line, soil shoved
+   ahead into bump rows, roost spray behind a spinning tyre). It lands in the layer's
+   trenches first and buries the prints there (no crisp knobs left); what is left lies
+   as a thin fluffy cover of at most MXD_SOFT_COVER_UP above the layer top - the sim
+   already raises the ridden ground by the same volume, so the layer must not stack it
+   twice. Band as the sim's mxb_ss_deposit: centre X,Z (m from the terrain centre),
+   direction d, from a to b m along d, half-width w, volume m^3, with the same tent
+   profile. Bands bigger than cover_samples texels are sampled at random (each sample
+   carries its share), so a 2 m row crest or a 1 m roost spray costs the same. */
+#define MXD_SOFT_COVER_UP 6 /* units (mm) */
+#ifndef MXD_SOFT_COVER_SHARE
+#define MXD_SOFT_COVER_SHARE .5f /* of the dropped volume that lands in the layer (the rest is the sim's broad mound) */
+#endif
+static inline void mxd_soft_cover(MxdSoft *s,float X,float Z,const float d[2],float a,float b,float w,float volume){
+    if(!s||!(s->thickness>0.f)||!(volume>0.f)||!isfinite(volume)||!isfinite(X)||!isfinite(Z)||!d)return;
+    float dl=hypotf(d[0],d[1]);if(!(dl>1e-4f)||!(w>0.f))return;
+    const float f0=d[0]/dl,f1=d[1]/dl,n0=-f1,n1=f0,px=X+.5f*s->span_x,pz=Z+.5f*s->span_z;
+    const float mid=.5f*(a+b),half=.5f*fabsf(b-a)+s->cell,ww=w+s->cell;
+    const float k=MXD_SOFT_COVER_SHARE*volume/(half*ww)/MXD_SOFT_UNIT; /* units at tent weight 1: the tent integrates to half*ww */
+    const int nu=(int)ceilf(2.f*half/s->cell),nv=(int)ceilf(2.f*ww/s->cell),cells=nu*nv;
+    const int maxs=s->defer_relax?16:384; /* pre-wear: 280k passes, coarser sampling (~+.8 s) */const int sampled=cells>maxs;const int n=sampled?maxs:cells;
+    const float share=sampled?(float)cells/(float)n:1.f;
+    s->serial++;if(!s->serial)s->serial=1;
+    for(int i=0;i<n;i++){
+        float u,v;
+        if(sampled){u=mid-half+2.f*half*mxd_soft_rand(s);v=-ww+2.f*ww*mxd_soft_rand(s);}
+        else{u=mid-half+((float)(i/nv)+.5f)*s->cell;v=-ww+((float)(i%nv)+.5f)*s->cell;}
+        float wt=(1.f-fabsf(u-mid)/half)*(1.f-fabsf(v)/ww);if(wt<=0.f)continue;
+        float add=k*wt*share;int q=(int)floorf(add+mxd_soft_rand(s));if(q<=0)continue;
+        const int ta=(int)floorf((px+f0*u+n0*v)/s->cell),tb=(int)floorf((pz+f1*u+n1*v)/s->cell);
+        {const uint8_t *r=mxd_soft_peek(s,ta,tb);if(!r||(r[0]==128&&r[1]==0))continue;} /* untouched layer stays clean (no crumbs sprinkled over it) */
+        uint8_t *p=mxd_soft_at(s,ta,tb);if(!p)continue;
+        int cur=(int)p[0]-128;
+        if(cur<0){int fill=q<-cur?q:-cur;cur+=fill;q-=fill;if(fill>=2)p[1]&=0x7f;} /* buried: the knob pits are gone */
+        if(q>0&&cur<MXD_SOFT_COVER_UP){cur+=q;if(cur>MXD_SOFT_COVER_UP)cur=MXD_SOFT_COVER_UP;p[1]&=0x7f;}
+        p[0]=(uint8_t)(cur+128);
+    }
+}
 /* Saved layer (version 2: 1 mm steps; version 1 files, .5 mm, are converted on load): "MXSL", version, tiles_x, tiles_z, tile, cell, span_x, span_z,
    thickness, count, then count x {uint32 tile index, tile bytes}. */
 static inline int mxd_soft_write(const MxdSoft *s,FILE *f){

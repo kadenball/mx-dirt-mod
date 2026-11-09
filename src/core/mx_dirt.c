@@ -134,6 +134,7 @@ static int ra_read(void *,uint64_t,void *,size_t);
 #define RA_GAME_DEFORMATION_RVA 0xe55bfcu
 #define RA_GAME_TRACK_CONDITIONS_RVA 0xe55c14u
 static unsigned ra_follow_game_deformation=1,ra_game_deformation_reference=25;
+static float ra_game_factor=1.f; /* this session's Deformation slider factor (1 at the reference), also scales the soft layer */
 static int ra_game_deform_off;
 static uint64_t ra_publish_offers,ra_publish_deferred,ra_publish_accepted;
 static unsigned ra_close_mask;static uint64_t ra_close_generation;
@@ -199,15 +200,15 @@ static int ra_read(void *user,uint64_t source,void *dest,size_t bytes) {
    ~1.4x), capped at 3x and the sim's 10..300% range. Slider 0 = no new
    deformation, like native MX. Unreadable/odd value -> INI depth unchanged. */
 static float ra_game_depth(void){
- float scale=-1.f,cond=-1.f,factor=1.f,depth=(float)ra_dirt_sim_depth;ra_game_deform_off=0;
+ float scale=-1.f,cond=-1.f,factor=1.f,depth=(float)ra_dirt_sim_depth;ra_game_deform_off=0;ra_game_factor=1.f;
  int have=ra_follow_game_deformation&&ra_image&&RA_GAME_TRACK_CONDITIONS_RVA+4<=ra_image_size&&
   ra_read(NULL,(uint64_t)(uintptr_t)ra_image+RA_GAME_DEFORMATION_RVA,&scale,4)&&isfinite(scale)&&scale>=0.f&&scale<=20.f;
  if(ra_image&&RA_GAME_TRACK_CONDITIONS_RVA+4<=ra_image_size&&ra_read(NULL,(uint64_t)(uintptr_t)ra_image+RA_GAME_TRACK_CONDITIONS_RVA,&cond,4)&&!isfinite(cond))cond=-1.f;
  if(have){
-  if(scale<=0.f){ra_game_deform_off=1;factor=0.f;}
+  if(scale<=0.f){ra_game_deform_off=1;factor=0.f;ra_game_factor=0.f;}
   else{float r=(float)ra_game_deformation_reference,ref=r<=100.f?r/100.f:1.f+(r-100.f)*19.f/100.f;
    factor=sqrtf(scale/ref);if(factor>3.f)factor=3.f;
-   depth*=factor;if(depth<10.f)depth=10.f;if(depth>300.f)depth=300.f;}
+   depth*=factor;if(depth<10.f)depth=10.f;if(depth>300.f)depth=300.f;ra_game_factor=factor;}
  }
  if(ra_log){fprintf(ra_log,"{\"kind\":\"game_deformation\",\"follow\":%u,\"read\":%s,\"scale\":%.6g,\"slider_percent\":%.4g,\"reference_percent\":%u,\"factor\":%.6g,\"ini_depth_percent\":%u,\"effective_depth_percent\":%.6g,\"deformation_off\":%s,\"track_conditions\":%.6g}\n",
   ra_follow_game_deformation,have?"true":"false",(double)scale,have?(double)(scale<=1.f?scale*100.f:100.f+(scale-1.f)*100.f/19.f):-1.0,ra_game_deformation_reference,(double)factor,ra_dirt_sim_depth,(double)depth,ra_game_deform_off?"true":"false",(double)cond);fflush(ra_log);}
@@ -448,11 +449,13 @@ static void ra_soft_save(void){
 /* At setup, before pre-wear: a track with saved wear gets its saved marks back. */
 static void ra_soft_setup(uint64_t saved_wear){
  if(!ra_session||!ra_soft_mm)return;
- float t=(float)(ra_soft_mm<5?5:ra_soft_mm)/1000.f;
+ /* the in-game Deformation slider scales the soft layer like the ruts (slider 0: no marks, no layer) */
+ if(ra_game_deform_off)return;
+ float t=(float)(ra_soft_mm<5?5:ra_soft_mm)/1000.f*ra_game_factor;if(t<.005f)t=.005f;if(t>.10f)t=.10f;
  if(!mxdirt_session_set_soft_layer(ra_session,t)){if(ra_log){fprintf(ra_log,"{\"kind\":\"soft_layer\",\"ok\":0}\n");fflush(ra_log);}return;}
  char path[MAX_PATH];int loaded=saved_wear>4000&&ra_soft_path(path,sizeof(path),0)&&mxdirt_session_soft_load(ra_session,path);
  MxdirtSoftView v;memset(&v,0,sizeof(v));mxdirt_session_soft_view(ra_session,&v);
- if(ra_log){fprintf(ra_log,"{\"kind\":\"soft_layer\",\"ok\":1,\"thickness_mm\":%u,\"loaded\":%d,\"tiles\":%u}\n",ra_soft_mm,loaded,v.allocated);fflush(ra_log);}
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"soft_layer\",\"ok\":1,\"thickness_mm\":%u,\"scaled_mm\":%.1f,\"loaded\":%d,\"tiles\":%u}\n",ra_soft_mm,(double)(t*1000.f),loaded,v.allocated);fflush(ra_log);}
 }
 static int ra_setup(void) {
  if(ra_session)return 1;

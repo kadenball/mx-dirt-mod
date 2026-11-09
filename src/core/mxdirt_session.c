@@ -239,11 +239,15 @@ static void soft_contact(void *user,unsigned wheel,const MxbSoilSimWheel *w,floa
         soil.thick=soil.thick*fminf(1.3f,fmaxf(.35f,1.f-1.1f*(c-c0)))+5.f*lo;}
     mxd_soft_stamp(s->soft,wheel==1,X,Z,w->fwd,w->lat,v,w->dt,w->load,spin,skid,w->slip_lat,w->material,w->print_fade<.3f,&soil);
 }
+/* Loose soil the sim drops (berms, row crests, roost) fills the layer's trenches and buries prints. */
+static void soft_deposit(void *user,float X,float Z,const float d[2],float a,float b,float w,float volume){
+    MxdirtSession *s=user;if(s&&s->soft)mxd_soft_cover(s->soft,X,Z,d,a,b,w,volume);
+}
 int mxdirt_session_set_soft_layer(MxdirtSession *s,float thickness_m){
     if(!fresh(s)||!s->sim||s->soft||!isfinite(thickness_m))return 0;
     if(thickness_m<=0.f)return 1;
     s->soft=mxd_soft_create(s->sim->span_x,s->sim->span_z,thickness_m);if(!s->soft)return 0;
-    s->sim->on_contact=soft_contact;s->sim->on_contact_user=s;return 1;
+    s->sim->on_contact=soft_contact;s->sim->on_contact_user=s;s->sim->on_deposit=soft_deposit;s->sim->on_deposit_user=s;return 1;
 }
 int mxdirt_session_soft_view(const MxdirtSession *s,MxdirtSoftView *v){
     if(!owned(s)||!v||!s->soft)return 0;const MxdSoft *m=s->soft;

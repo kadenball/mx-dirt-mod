@@ -148,9 +148,12 @@ static const char mxdirt_fragment_shader[]=
  "vec2 sl=p-soft_origin;float se=min(min(sl.x-soft_window.x,soft_window.z-sl.x),min(sl.y-soft_window.y,soft_window.w-sl.y));"
  "s_vis=smoothstep(.5,3.,se)*(1.-smoothstep(soft_cell*1.2,soft_cell*5.,px));"
  "if(s_vis>.01){"
- "vec3 V=normalize(camera-w);vec2 dv=V.xz/max(V.y,.2);float top=min(127.*soft_unit,soft_depth*1.7),bot=-min(127.*soft_unit,soft_depth*2.);"
- "float yp=top,hp=SH(sl+dv*top),yh=bot;"
- "for(int i=1;i<=16;i++){float y=mix(top,bot,float(i)/16.),h=SH(sl+dv*y);if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}"
+ /* the layer lies ON the ridden ground: its untouched top sits so above the terrain mesh,
+    so a pressed trench floor (~.6 of the layer) is where the bike's tyre actually rolls
+    (drawn from the mesh down, the tyre floated over its own trench) */
+ "vec3 V=normalize(camera-w);vec2 dv=V.xz/max(V.y,.2);float so=.6*soft_depth,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
+ "float yp=top,hp=SH(sl+dv*top)+so,yh=bot;"
+ "for(int i=1;i<=16;i++){float y=mix(top,bot,float(i)/16.),h=SH(sl+dv*y)+so;if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}"
  "vec2 q=sl+dv*yh;float c=soft_cell;s_h=SH(q);"
  "vec2 sg=vec2(SH(q+vec2(c,0))-SH(q-vec2(c,0)),SH(q+vec2(0,c))-SH(q-vec2(0,c)))/(2.*c);"
  "s_cav=(SH(q+vec2(2.5*c,0))+SH(q-vec2(2.5*c,0))+SH(q+vec2(0,2.5*c))+SH(q-vec2(0,2.5*c)))*.25-s_h;"
