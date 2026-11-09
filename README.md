@@ -35,6 +35,8 @@ The ruts and bumps are written into MX Bikes' own terrain, so **the bike really 
 
 To remove the mod, double-click **`Uninstall.cmd`** in the same folder.
 
+Prefer copying files yourself? See [Manual install](#manual-install-no-installer).
+
 ---
 
 ## Requirements
@@ -69,7 +71,46 @@ That's it. The installer:
 
 If Windows shows a blue "Windows protected your PC" box, click *More info* → *Run anyway*. The installer is a plain PowerShell script (`install\Install.ps1`) that you can read first.
 
-**Installing by hand:** copy everything inside the zip's `plugins` folder into `MX Bikes\plugins`. That's all the game needs. The launcher is optional.
+### Manual install (no installer)
+
+Use this if you'd rather copy the files yourself, or `Install.cmd` doesn't work for you. It takes about two minutes.
+
+**1. Close MX Bikes.**
+
+**2. Extract the zip.** Right-click it, choose *Extract All…*, and open the extracted folder. You'll see:
+
+```
+MX-Dirt-Mod-<version>\
+  plugins\      <- the mod itself (this is all the game needs)
+  launcher\     <- optional settings app
+  install\, Install.cmd, Uninstall.cmd, README.txt, LICENSE, SUPPORTED_EXE.txt
+```
+
+**3. Open your MX Bikes folder.** In Steam, right-click **MX Bikes** → *Manage* → *Browse local files*. That's the folder with `mxbikes.exe`, usually `C:\Program Files (x86)\Steam\steamapps\common\MX Bikes`. Open its `plugins` folder. If there's no `plugins` folder, create one.
+
+**4. Move old dirt plugins out (if you have any).** If your `plugins` folder contains any of these, move them somewhere else, for example a new folder on your Desktop. They patch the same game code and will clash:
+- `living_dirt.dlo`
+- any `mxb_reflex_*.dlo` (pre-release builds of this mod)
+
+**5. Copy the mod in.** From the zip's `plugins` folder, copy these four files into `MX Bikes\plugins`:
+
+| File | What it is |
+|---|---|
+| `mx_dirt.dlo` | the dirt simulation (ruts, bumps, pre-wear) |
+| `mx_dirt_render.dlo` | the dirt look (shading, tyre marks, soft layer) |
+| `mx_dirt.ini` | simulation settings |
+| `mx_dirt_render.ini` | look settings |
+
+Updating an existing install? Copy only the two `.dlo` files to keep your settings. Back up the old ones first if you might want them back.
+
+**6. Optional: the launcher.** To change settings with buttons instead of editing the `.ini` files:
+- Create `MX Bikes\plugins\mx_dirt_launcher` and copy everything from the zip's `launcher` folder into it.
+- Right-click each copied file → *Properties*. If there's an **Unblock** box at the bottom, tick it and press OK. Windows blocks scripts that came from the internet.
+- Double-click **`MX Dirt Mod.cmd`** to open it. For a desktop shortcut, right-click `MX Dirt Mod.cmd` → *Send to* → *Desktop (create shortcut)*.
+
+**7. Check it works.** Start MX Bikes and open a track in **Testing**. A file `MX Bikes\plugins\mx_dirt.jsonl` appears, the mod's log. Ride and you'll see ruts and tyre marks form. If nothing happens, see [Troubleshooting](#troubleshooting).
+
+Without the launcher, every setting is in the two `.ini` files: open them in Notepad. They're explained in [Settings reference](#settings-reference). To reset a track's wear by hand, see [Uninstall](#uninstall) (*Tracks' saved wear*).
 
 ---
 
@@ -273,6 +314,7 @@ What stays:
 **Uninstalling by hand:** with the game closed, remove these from `MX Bikes\plugins`:
 - `mx_dirt.dlo` and `mx_dirt_render.dlo`
 - `mx_dirt.ini` and `mx_dirt_render.ini`
+- optional: the `mx_dirt_launcher` and `mx_dirt_soft` folders, `mx_dirt.jsonl` and `mx_dirt_render.log`, and the desktop shortcut
 
 **Turning it off without uninstalling:** untick *Dirt mod enabled* in the launcher, or set `enabled=0` in both ini files.
 
@@ -281,6 +323,8 @@ What stays:
 ## Updating
 
 Close MX Bikes, extract the new release and run its `Install.cmd`. Your settings, laps and saved wear are kept. The old plugins go to the backup folder.
+
+By hand: copy the new release's `mx_dirt.dlo` and `mx_dirt_render.dlo` over the old ones in `MX Bikes\plugins`, and the `launcher` files over `plugins\mx_dirt_launcher` if you use it.
 
 If a new release adds new settings, they use their defaults until you change them in the launcher. Press **Recommended** and then **Save** to take all the new defaults.
 
