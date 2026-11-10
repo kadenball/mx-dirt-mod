@@ -75,6 +75,9 @@ int mxdirt_session_soft_view(const MxdirtSession *,MxdirtSoftView *out);
 /* Save / restore the layer (a saved track keeps its marks). load: before any pass. */
 int mxdirt_session_soft_save(const MxdirtSession *,const char *path);
 int mxdirt_session_soft_load(MxdirtSession *,const char *path);
+/* dirt-sim soil state (packing, loose, moisture, clods, prints) saved with the track; wear = mxdirt_session_saved_wear(s,.015) */
+int mxdirt_session_soil_save(const MxdirtSession *,const char *path,uint64_t wear);
+int mxdirt_session_soil_load(MxdirtSession *,const char *path,uint64_t wear);
 /* Ghost riders: recorded laps replayed by the dirt sim, staggered around the lap.
    Laps stay owned by the caller and must outlive the session (or a later count 0). */
 #define MXDIRT_SESSION_MAX_GHOSTS 12

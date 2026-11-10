@@ -8,6 +8,7 @@
 #include "mxb_soil_live_wear.h"
 #include "mxdirt_soil_evolution.h"
 #include "mxdirt_soft_layer.h"
+#include "mxb_soil_state_io.h"
 
 typedef struct {float y,z,zd;int valid;MxbBumpSit sit;float off,sw,gs,gb,ge;int landed;} MxbBumpState; /* off: seconds without ground contact, sw: filtered swing, g*: this frame's stress/braking/energy for the live gate */
 struct MxdirtSession {
@@ -38,6 +39,7 @@ struct MxdirtSession {
     MxbSoilEvolution *soil; /* work history: packed/loose/brake/drive -> cut gain (mxdirt_soil_evolution.h) */
     unsigned char *prewear_tiles; /* tiles worn by the pre-wear gate, published with the next step */
     MxdSoft *soft;                /* soft top layer, display only (mxdirt_soft_layer.h) */
+    int soil_touched;             /* the sim's soil state has something worth saving (ridden, pre-worn or loaded) */
     /* Per-stage step timing (QPC ticks): contacts+bumps, dirt sim, height conversion. */
     uint64_t timing_frames,timing_ticks[3],timing_max[3];
 };
@@ -265,6 +267,22 @@ int mxdirt_session_soft_load(MxdirtSession *s,const char *path){
     if(!owned(s)||!s->soft||!path||s->soft->stamps||s->soft->allocated)return 0;
     FILE *f=fopen(path,"rb");if(!f)return 0;int ok=mxd_soft_read(s->soft,f);fclose(f);return ok;
 }
+static void sim_to_soil_rect(MxdirtSession *s,int x0,int x1,int z0,int z1);
+/* Dirt-sim soil state saved with the track (format: mxb_soil_state_io.h). */
+int mxdirt_session_soil_save(const MxdirtSession *s,const char *path,uint64_t wear){
+    if(!s||!s->sim||!path||!s->soil_touched)return 0;
+    char tmp[MAX_PATH];if(snprintf(tmp,sizeof(tmp),"%s.tmp",path)>=(int)sizeof(tmp))return 0;
+    FILE *f=fopen(tmp,"wb");if(!f)return 0;int ok=mxb_soil_state_write(s->sim,f,wear);ok=fclose(f)==0&&ok;
+    return ok&&MoveFileExA(tmp,path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
+}
+/* Before the first step, onto a sim nothing has written yet. Returns tiles loaded (>0), 0 not loaded. */
+int mxdirt_session_soil_load(MxdirtSession *s,const char *path,uint64_t wear){
+    if(!owned(s)||!s->sim||!path||s->generated_sequence||s->physics_seen||s->soil_touched)return 0;
+    FILE *f=fopen(path,"rb");if(!f)return 0;uint32_t tiles=0;int ok=mxb_soil_state_read(s->sim,f,wear,&tiles);fclose(f);
+    if(!ok)return 0;
+    s->soil_touched=1;if(s->soil&&tiles)sim_to_soil_rect(s,0,(int)s->sim->size-1,0,(int)s->sim->size-1); /* work history follows the loaded packing */
+    return (int)(tiles?tiles:1);
+}
 int mxdirt_session_sim_view(const MxdirtSession *s,MxdirtSimView *v){
     if(!owned(s)||!v||!s->sim||s->priming)return 0;
     const MxbSoilSim *m=s->sim;
@@ -367,7 +385,7 @@ int mxdirt_session_prewear(MxdirtSession *s,const MxbDirtGhostLap *laps,unsigned
     if(s->soft){s->soft->defer_relax=1;s->soft->has_last[0]=s->soft->has_last[1]=0;} /* soft layer settles once at the end */
     int box[4];uint64_t n=mxb_soil_prewear(s->sim,laps,count,riders,spread,clip,.13f,seed,uni,box); /* .13 of a live pass */
     if(s->soft){s->soft->defer_relax=0;s->soft->has_last[0]=s->soft->has_last[1]=0;mxd_soft_relax_all(s->soft,s->sim->p.moisture,2);}
-    free(s->prewear_tiles);s->prewear_tiles=uni;
+    free(s->prewear_tiles);s->prewear_tiles=uni;s->soil_touched=1;
     if(s->soil&&box[2]>=0)sim_to_soil_rect(s,box[0]-6,box[2]+6,box[1]-6,box[3]+6); /* work history follows the worn area */
     if(passes)*passes=n;return 1;
 }
@@ -452,7 +470,7 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
         gains[w]=cut;
     }
     uint64_t t1=qpc_now();
-    if(!s->priming)mxb_soil_sim_advance(s->sim,frames[0].dt);
+    if(!s->priming){mxb_soil_sim_advance(s->sim,frames[0].dt);s->soil_touched=1;}
     mxb_soil_sim_begin(s->sim);
     for(int w=0;w<2;w++){
         s->live_ok[w]=0;

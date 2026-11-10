@@ -50,7 +50,12 @@ function Game-Running { [bool](Get-Process -Name mxbikes -ErrorAction SilentlyCo
 # ---- settings: [file, section, key, label, min, max, recommended, tip] ----
 $WearLevels=[ordered]@{ 'Off (fresh track)'=0; 'Practice'=25; 'After moto 1 (Pro look)'=50; 'End of day'=80; 'Destroyed'=130 }
 # live_wear_percent: how much each of your own laps wears the track
-$LiveLevels=[ordered]@{ 'Low (slow, realistic)'=0; 'Medium (default)'=100 }
+$LiveLevels=[ordered]@{ 'Low (slow, realistic)'=0; 'Medium (default)'=100; 'Arcade (hero dirt)'=200 }
+# Arcade: big readable features that build fast and are fun to rail, less chop that kicks you around.
+# Shown settings it fills in, and ini-only settings it writes (back to 100 when you leave Arcade).
+$ArcadeShown=@{ dirt_sim_depth_percent=80; dirt_sim_moisture_percent=45; rolling_bumps_percent=30; soft_layer_mm=100; dirt_strength=160 }
+$ArcadeHidden=[ordered]@{ rut_capture_percent=150; wall_cohesion_percent=150; packed_hardness_percent=70; braking_bumps_percent=60; drying_percent=0; roost_clods_percent=200 }
+$ArcadeLevel='Arcade (hero dirt)'
 $Num=@(
   @('active','soil','prewear_spread_cm','Wear spread across track (cm)',20,500,140,'How far the virtual riders spread from your lines. Lower = fewer, deeper main lines.'),
   @('active','soil','dirt_sim_depth_percent','Rut depth (%)',10,300,60,'How deep tyres cut. Also follows the game''s erode slider.'),
@@ -97,7 +102,7 @@ Row 'Starting wear' $wear 'Virtual riders ride your recorded laps before you sta
 $ctl=@{}
 foreach($n in $Num){ if($n[1] -eq 'renderer' -and -not $hdrR){ Header 'Look'; $hdrR=$true } elseif($n[2] -eq 'dirt_sim_depth_percent'){
         Header 'Wear while you ride'
-        Row 'Wear from your laps' $live 'How fast your own riding wears the track. Medium: about 15 of your laps wear it like the Practice level. Low: slow one-rider wear, your line packs in and bumps stay small.'
+        Row 'Wear from your laps' $live 'How fast your own riding wears the track. Medium: about 15 of your laps wear it like the Practice level. Low: slow one-rider wear, your line packs in and bumps stay small. Arcade: hero dirt - wear builds twice as fast, deep grippy ruts and tall berms you can rail, less chop, stays damp all session (also sets rut depth, moisture, bumps, soft layer, look and starting wear).'
         Header 'Dirt' }
     $u=New-Object Windows.Forms.NumericUpDown;$u.Minimum=$n[4];$u.Maximum=$n[5];$u.Width=80;$ctl[$n[2]]=$u;Row $n[3] $u $n[7] }
 foreach($c in $Chk){ $b=New-Object Windows.Forms.CheckBox;$b.Text=$c[3];$b.AutoSize=$true;$ctl[$c[2]]=$b;$tbl.Controls.Add($b);$tbl.SetColumnSpan($b,2) }
@@ -132,7 +137,7 @@ function Load-All {
     $lv=[int](Get-Val $L.active 'soil' 'live_wear_percent' '100')
     $ln=($LiveLevels.Keys | Where-Object { $LiveLevels[$_] -eq $lv } | Select-Object -First 1)
     if(-not $ln){ $ln="Custom ($lv %)"; if(-not $live.Items.Contains($ln)){[void]$live.Items.Add($ln)} }
-    $live.SelectedItem=$ln
+    $script:Loading=$true;$live.SelectedItem=$ln;$script:Loading=$false;$script:LastLive=$ln
     foreach($n in $Num){ $v=[int](Get-Val $L[$n[0]] $n[1] $n[2] "$($n[6])"); $ctl[$n[2]].Value=[Math]::Max($n[4],[Math]::Min($n[5],$v)) }
     foreach($c in $Chk){ $ctl[$c[2]].Checked=(Get-Val $L[$c[0]] $c[1] $c[2] "$($c[4])") -eq '1' }
     Load-Tracks; Update-Status }
@@ -151,6 +156,10 @@ function Save-All {
     Set-Val $L.active 'soil' 'prewear_riders' "$r"
     $lw=if($LiveLevels.Contains("$($live.SelectedItem)")){$LiveLevels["$($live.SelectedItem)"]}else{[int]("$($live.SelectedItem)" -replace '\D','')}
     Set-Val $L.active 'soil' 'live_wear_percent' "$lw"
+    # Arcade's ini-only settings: written with Arcade, back to the defaults when an Arcade ini leaves it
+    if("$($live.SelectedItem)" -eq $ArcadeLevel){ foreach($k in $ArcadeHidden.Keys){ Set-Val $L.active 'soil' $k "$($ArcadeHidden[$k])" } }
+    else{ $was=$true;foreach($k in $ArcadeHidden.Keys){ if((Get-Val $L.active 'soil' $k '100') -ne "$($ArcadeHidden[$k])"){$was=$false} }
+        if($was){ foreach($k in $ArcadeHidden.Keys){ Set-Val $L.active 'soil' $k '100' } } }
     foreach($n in $Num){ Set-Val $L[$n[0]] $n[1] $n[2] "$([int]$ctl[$n[2]].Value)" }
     # the renderer drops its dirt pass unless start < end <= 60
     $end=[int]$ctl['dirt_fade_end'].Value; Set-Val $L.renderer 'renderer' 'dirt_fade_start' "$([Math]::Max(5,[int]($end*.75)))"
@@ -166,6 +175,13 @@ function Save-All {
 function Apply-Recommended { $wear.SelectedItem='After moto 1 (Pro look)'; $live.SelectedItem='Medium (default)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
     $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Recommended settings filled in - press Save.' }
 $rec.Add_Click({ Apply-Recommended })
+# picking Arcade fills in its settings; leaving it puts the recommended ones back
+$live.Add_SelectedIndexChanged({ if($script:Loading){return}; $now="$($live.SelectedItem)"
+    if($now -eq $ArcadeLevel){ foreach($k in $ArcadeShown.Keys){ $ctl[$k].Value=$ArcadeShown[$k] }; $wear.SelectedItem='End of day'
+        $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Arcade settings filled in - press Save.' }
+    elseif($script:LastLive -eq $ArcadeLevel){ foreach($n in $Num){ if($ArcadeShown.ContainsKey($n[2])){ $ctl[$n[2]].Value=$n[6] } }; $wear.SelectedItem='After moto 1 (Pro look)'
+        $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Realistic settings filled in - press Save.' }
+    $script:LastLive=$now })
 $save.Add_Click({ try{ Save-All }catch{ [Windows.Forms.MessageBox]::Show("Could not save:`n$($_.Exception.Message)",'MX Dirt Mod','OK','Error') | Out-Null } })
 $launch.Add_Click({ try{ Save-All; if(Game-Running){ $status.Text='MX Bikes is already running - restart it to apply.'; return }
         Start-Process 'steam://rungameid/655500'; $f.Close() }catch{ [Windows.Forms.MessageBox]::Show("Could not start:`n$($_.Exception.Message)",'MX Dirt Mod','OK','Error') | Out-Null } })
@@ -186,6 +202,9 @@ if($SelfTest){
     $L2=Read-Lines $Ini.active; "active.enabled=$(Get-Val $L2 'active' 'enabled' '?') riders=$(Get-Val $L2 'soil' 'prewear_riders' '?') live_wear=$(Get-Val $L2 'soil' 'live_wear_percent' '?') spread=$(Get-Val $L2 'soil' 'prewear_spread_cm' '?')"
     $R2=Read-Lines $Ini.renderer; "renderer.enabled=$(Get-Val $R2 'renderer' 'enabled' '?') fade=$(Get-Val $R2 'renderer' 'dirt_fade_start' '?')..$(Get-Val $R2 'renderer' 'dirt_fade_end' '?')"
     "layout=$(if($Ini.ld){'dev'}else{'release'}) tracks=$($track.Items.Count)"
+    # Arcade on, then back to Medium: its ini-only settings go back to 100, shown ones to recommended
+    foreach($pick in $ArcadeLevel,'Medium (default)'){ $live.SelectedItem=$pick; Save-All; $L2=Read-Lines $Ini.active
+        "$pick -> live_wear=$(Get-Val $L2 'soil' 'live_wear_percent' '?') riders=$(Get-Val $L2 'soil' 'prewear_riders' '?') depth=$(Get-Val $L2 'soil' 'dirt_sim_depth_percent' '?') moisture=$(Get-Val $L2 'soil' 'dirt_sim_moisture_percent' '?') capture=$(Get-Val $L2 'soil' 'rut_capture_percent' '?') drying=$(Get-Val $L2 'soil' 'drying_percent' '?') roost=$(Get-Val $L2 'soil' 'roost_clods_percent' '?') strength=$(Get-Val (Read-Lines $Ini.renderer) 'renderer' 'dirt_strength' '?')" }
     $f.Dispose(); return }
 if($ApplyRecommended){ Apply-Recommended; Save-All; "saved: $($status.Text)"; $f.Dispose(); return }
 if($Snapshot){ $f.Show(); [Windows.Forms.Application]::DoEvents(); $bmp=New-Object Drawing.Bitmap($f.Width,$f.Height); $f.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$f.Width,$f.Height))); $bmp.Save($Snapshot); $f.Close(); return }

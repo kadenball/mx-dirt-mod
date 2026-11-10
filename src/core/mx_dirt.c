@@ -432,8 +432,10 @@ static void ra_terrain_dump(const RaGrid *g,const int16_t *base,const int32_t *d
 }
 static void ra_ghost_free(void);
 static void ra_soft_save(void);
+static void ra_soil_save(void);
 static void ra_solver_destroy(void){
  ra_soft_save(); /* the track keeps its soft-layer marks with its saved wear */
+ ra_soil_save(); /* and the dirt sim's packing, loose soil, moisture and prints */
  mxdirt_session_destroy(ra_session);ra_session=NULL;ra_ghost_free(); /* laps were borrowed by that session */
 }
 #include "mxdirt_laps.inc"
@@ -445,6 +447,21 @@ static void ra_soft_save(void){
  MxdirtSoftView v;char path[MAX_PATH];if(!ra_session||!mxdirt_session_soft_view(ra_session,&v)||(!v.stamps&&!v.loaded)||!ra_soft_path(path,sizeof(path),1))return;
  LARGE_INTEGER a,b,f;QueryPerformanceCounter(&a);int ok=mxdirt_session_soft_save(ra_session,path);QueryPerformanceCounter(&b);QueryPerformanceFrequency(&f);
  if(ra_log){fprintf(ra_log,"{\"kind\":\"soft_layer_save\",\"ok\":%d,\"tiles\":%u,\"refused\":%u,\"stamps\":%llu,\"ms\":%.0f}\n",ok,v.allocated,v.refused,(unsigned long long)v.stamps,(double)(b.QuadPart-a.QuadPart)*1000./(double)f.QuadPart);fflush(ra_log);}
+}
+/* plugins\mx_dirt_soft\<track>\soil.mss: the dirt sim's soil state (MX Bikes saves only heights) */
+static int ra_soil_path(char *out,size_t cap,int create){
+ char dir[MAX_PATH];return ra_lap_dir(RA_SOFT_DIR,dir,sizeof(dir),create)&&snprintf(out,cap,"%s\\soil.mss",dir)<(int)cap;
+}
+static void ra_soil_save(void){
+ char path[MAX_PATH];if(!ra_session||!ra_soil_path(path,sizeof(path),1))return;
+ uint64_t wear=mxdirt_session_saved_wear(ra_session,.015);if(wear<=4000)return; /* nothing worn worth keeping (a reset track saves no soil) */
+ LARGE_INTEGER a,b,f;QueryPerformanceCounter(&a);int ok=mxdirt_session_soil_save(ra_session,path,wear);QueryPerformanceCounter(&b);QueryPerformanceFrequency(&f);
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"soil_state_save\",\"ok\":%d,\"wear\":%llu,\"ms\":%.0f}\n",ok,(unsigned long long)wear,(double)(b.QuadPart-a.QuadPart)*1000./(double)f.QuadPart);fflush(ra_log);}
+}
+static void ra_soil_setup(uint64_t saved_wear){
+ char path[MAX_PATH];int tiles=0;
+ if(ra_session&&saved_wear>4000&&ra_soil_path(path,sizeof(path),0))tiles=mxdirt_session_soil_load(ra_session,path,saved_wear);
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"soil_state\",\"saved_wear\":%llu,\"loaded_tiles\":%d}\n",(unsigned long long)saved_wear,tiles);fflush(ra_log);}
 }
 /* At setup, before pre-wear: a track with saved wear gets its saved marks back. */
 static void ra_soft_setup(uint64_t saved_wear){
@@ -494,7 +511,9 @@ static int ra_setup(void) {
  stage="grid_changed";
  if(!ra_grid_read(&last)||memcmp(&first,&last,sizeof(first))){ra_solver_destroy();goto end;}
  ra_grid=first;ra_rebind=1;ok=1;
- ra_soft_setup(ra_soft_mm?mxdirt_session_saved_wear(ra_session,.015):0); /* optional, display only */
+ {uint64_t sw=mxdirt_session_saved_wear(ra_session,.015);
+  ra_soil_setup(sw); /* optional: the saved packing / loose soil / moisture / prints of a ridden track */
+  ra_soft_setup(ra_soft_mm?sw:0);} /* optional, display only */
  ra_ghost_load(); /* optional: no laps or a bad file never fails setup */
  if(ra_log){fprintf(ra_log,"{\"active\":true,\"kind\":\"rut_shape\",\"sharp_ruts\":%d,\"requested\":%u,\"capture_percent\":%u,\"cohesion_percent\":%u,\"clods_percent\":%u}\n",ra_sharp_live,ra_sharp_ruts,ra_capture_percent,ra_cohesion_percent,ra_clods_percent);fflush(ra_log);}
 end:if(!ok)ra_solver_destroy();free(base);free(dfm);QueryPerformanceCounter(&end);RaRecord *r=ra_record(RA_SETUP,ok);

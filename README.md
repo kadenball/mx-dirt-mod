@@ -159,6 +159,8 @@ Every tyre contact, every physics frame, works the soil under it:
 
 The wear goes into MX Bikes' terrain deformation, so the game's physics and your bike ride it.
 
+MX Bikes saves only the track's heights. The mod saves the rest of the soil with it when you leave a ridden track (packing, loose soil, damp spots, roost clods and tyre prints), so the track comes back ridden-in, not as fresh soil in the old shape. It is only loaded while the track's saved wear still matches; a reset track starts fresh.
+
 ### 2. Pre-wear
 - When a **fresh** track loads, a gate of virtual riders (50 by default) rides your four fastest recorded laps.
 - Each rider has its own line, spread and aggression, its own bike setup, and its own braking and gas points.
@@ -227,6 +229,7 @@ Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bike
 - **Wear from your laps:** how fast your own riding wears the track.
   - Medium (default): about 15 of your laps wear a track like the Practice level.
   - Low: slow, realistic one-rider wear. Your line packs in and bumps stay small.
+  - Arcade (hero dirt): not realistic, just fun. Wear builds twice as fast; deep, grippy ruts and tall berms you can rail; less chop; the dirt stays damp all session. Picking it also fills in its own rut depth (80), moisture (45), rolling bumps (30), soft layer (100 mm), look strength (160) and starting wear (End of day), and writes rut capture 150, wall cohesion 150, packed hardness 70, braking bumps 60, drying 0 and roost clods 200 to `mx_dirt.ini`. Picking Low or Medium again puts all of them back.
 - **Dirt:** rut depth, track firmness, moisture, rolling bumps, lines riding with you, and the soft dirt layer thickness.
 - **Look:** dirt look strength and distance, dirt shading on/off, tyre marks on/off.
 - **Record my laps:** needed for pre-wear.
@@ -369,6 +372,7 @@ When you report a problem, attach `plugins\mx_dirt.jsonl` and `plugins\mx_dirt_r
 | `MX Bikes\plugins\mx_dirt_launcher\` | The launcher |
 | `MX Bikes\plugins\mx_dirt_laps\<track>\*.dghost` | Your recorded laps |
 | `MX Bikes\plugins\mx_dirt_soft\<track>\layer.msl` | Soft dirt layer marks for the track's saved wear |
+| `MX Bikes\plugins\mx_dirt_soft\<track>\soil.mss` | The track's soil state: packing, loose soil, moisture, clods, prints (~10 MB) |
 | `MX Bikes\plugins\mx_dirt.jsonl`, `mx_dirt_render.log` | Logs (overwritten every game start) |
 | `Desktop\MX Dirt Mod.lnk` | Launcher shortcut |
 | `Documents\PiBoSo\MX Bikes\mx_dirt_mod_backups\` | Everything the installer, uninstaller or a reset replaced |
@@ -424,7 +428,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.3.0   # both + the release zip in build\
+.\package.ps1 -Version 1.4.0   # both + the release zip in build\
 ```
 
 Source layout:
