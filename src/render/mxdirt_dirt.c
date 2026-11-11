@@ -7,8 +7,8 @@ struct MxDirt {
  uintptr_t current_grid,base_grid;uint32_t width,height;
  uint16_t *band;size_t band_cap; /* one contiguous read of SIDE rows */
  uint16_t texels[MXDIRT_SIDE*MXDIRT_SIDE*2];
- int state_valid,state_fresh;int32_t state_x,state_z;uint64_t state_steps;const uint8_t *state_src;int state_prints;
- unsigned char state[MXDIRT_SIDE*MXDIRT_SIDE*4],prints[MXDIRT_SIDE*MXDIRT_SIDE*4];
+ int state_valid,state_fresh;int32_t state_x,state_z;uint64_t state_steps;const uint8_t *state_src;
+ unsigned char state[MXDIRT_SIDE*MXDIRT_SIDE*4];
 };
 MxDirt *mxdirt_create(void){return calloc(1,sizeof(MxDirt));}
 void mxdirt_destroy(MxDirt *d){if(d)free(d->band);free(d);}
@@ -101,8 +101,7 @@ int mxdirt_state(MxDirt *d,const MxDirtWindow *w,uint32_t grid_width,uint32_t gr
  if(!out)return 0;memset(out,0,sizeof(*out));
  if(!d||!w||!m||!m->comp||!m->loose||!m->moist||!m->clods||m->size<128||m->size>8192||grid_width<2||grid_height<2||
     !isfinite(m->moisture)||!isfinite(m->compaction0)){if(d)d->state_valid=0;return 0;}
- const int pr_on=m->print&&m->print_dir&&m->print_off;
- int moved=!d->state_valid||d->state_x!=w->first_x||d->state_z!=w->first_z||d->state_src!=m->comp||d->state_prints!=pr_on;
+ int moved=!d->state_valid||d->state_x!=w->first_x||d->state_z!=w->first_z||d->state_src!=m->comp;
  /* While riding the sim steps every frame: rebuild at most every other frame
     (a one-frame-late wetness/clod look is invisible; ~0.1 ms per rebuild). */
  int changed=moved||(d->state_steps!=m->steps&&!d->state_fresh);d->state_fresh=0;
@@ -110,35 +109,21 @@ int mxdirt_state(MxDirt *d,const MxDirtWindow *w,uint32_t grid_width,uint32_t gr
   const int32_t n=(int32_t)m->size;int mo8=(int)lrintf(fminf(1.f,fmaxf(0.f,m->moisture))*255.f);
   /* packed = (compaction-.30)/.50, untouched (0) reads 0; integer per texel */
   uint8_t pk_lut[256];pk_lut[0]=0;for(int v=1;v<256;v++)pk_lut[v]=unit_byte(((float)v/255.f-.30f)/.50f);
-  /* print lines are stored against the SIM texel centre; re-anchor them on the
-     window texel this sim texel is shown at (sub-cell, matters for blended grids) */
-  const float toff=m->vertex_exact?1.f:.5f;
-  const double ex=(double)w->spacing_x*(grid_width-1),ez=(double)w->spacing_z*(grid_height-1);
-  float cs_lut[256],sn_lut[256],dx_col[MXDIRT_SIDE];
-  if(pr_on){for(int a=0;a<256;a++){double ang=(double)a/256.*3.14159265358979;cs_lut[a]=(float)cos(ang);sn_lut[a]=(float)sin(ang);}
-   for(int32_t c=0;c<MXDIRT_SIDE;c++){int32_t i=w->first_x+c,col=m->vertex_exact?i-1:(int32_t)lrint((double)i*(n-1)/(grid_width-1));if(col<0)col=0;if(col>n-1)col=n-1;
-    dx_col[c]=(float)(((double)col+toff)/n*ex-(double)i*w->spacing_x);}} /* sim centre - window centre, x, per column */
   for(int32_t r=0;r<MXDIRT_SIDE;r++){
    /* native row j (z up) -> sim row (rows run with -z) */
    int32_t j=w->first_z+r,row=m->vertex_exact?n-1-j:(int32_t)lrint((double)(n-1)-(double)j*(n-1)/(grid_height-1));
    if(row<0)row=0;if(row>n-1)row=n-1;
    unsigned char *dst=d->state+(size_t)r*MXDIRT_SIDE*4;size_t base=(size_t)row*n;
    const uint8_t *comp=m->comp+base,*clods=m->clods+base;const float *loose=m->loose+base;const int8_t *moist=m->moist+base;
-   unsigned char *pd=d->prints+(size_t)r*MXDIRT_SIDE*4;
-   const float dz_row=(float)((1.-((double)row+toff)/n)*ez-(double)j*w->spacing_z); /* sim centre - window centre, z */
    for(int32_t c=0;c<MXDIRT_SIDE;c++){
     int32_t i=w->first_x+c,col=m->vertex_exact?i-1:(int32_t)lrint((double)i*(n-1)/(grid_width-1));
     if(col<0)col=0;if(col>n-1)col=n-1;
     float L=loose[col];int lo=L>0.f?(L<.04f?(int)(L*6375.f+.5f):255):0;     /* loose depth / 4 cm */
     int wet=mo8+moist[col];wet=wet<0?0:wet>255?255:wet;
     dst[4*c]=(unsigned char)((pk_lut[comp[col]]*(255-lo)+127)/255);dst[4*c+1]=(unsigned char)lo;dst[4*c+2]=(unsigned char)wet;dst[4*c+3]=clods[col];
-    if(pr_on&&m->print[base+(size_t)col]){size_t k=base+(size_t)col;uint8_t a=m->print_dir[k];
-     float o=(float)m->print_off[k]/100.f*w->spacing_x+(-sn_lut[a]*dx_col[c]+cs_lut[a]*dz_row);
-     int ob=(int)lrintf(o/w->spacing_x*100.f)+128;pd[4*c]=m->print[k];pd[4*c+1]=a;pd[4*c+2]=(unsigned char)(ob<1?1:ob>255?255:ob);pd[4*c+3]=0;}
-    else{pd[4*c]=0;pd[4*c+1]=0;pd[4*c+2]=128;pd[4*c+3]=0;}
    }
   }
-  d->state_valid=1;d->state_x=w->first_x;d->state_z=w->first_z;d->state_steps=m->steps;d->state_src=m->comp;d->state_prints=pr_on;d->state_fresh=1;
+  d->state_valid=1;d->state_x=w->first_x;d->state_z=w->first_z;d->state_steps=m->steps;d->state_src=m->comp;d->state_fresh=1;
  }
- out->valid=1;out->changed=changed;out->rgba=d->state;out->prints=d->prints;return 1;
+ out->valid=1;out->changed=changed;out->rgba=d->state;return 1;
 }

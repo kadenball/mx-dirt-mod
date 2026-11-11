@@ -14,7 +14,7 @@
 #include <wchar.h>
 static DWORD rc_thread;
 static int rc_started,rc_live,rc_retire,rc_fault;
-static int rc_dirt,rc_dirt_fault,rc_prints=1,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1;
+static int rc_dirt,rc_dirt_fault,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1;
 static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;
 static uint64_t rc_serial,rc_peak,rc_ticks,rc_recentres,rc_frames,rc_skips,rc_generation;
 static int rc_state_live;static MxDirtStats rc_stats;
@@ -73,7 +73,6 @@ int mxdirt_content_startup(const wchar_t *ini){
  if(GetPrivateProfileIntW(L"renderer",L"enabled",0,ini)!=1)goto end;
  UINT dirt=GetPrivateProfileIntW(L"renderer",L"dirt_material",1,ini),strength=GetPrivateProfileIntW(L"renderer",L"dirt_strength",135,ini),loose=GetPrivateProfileIntW(L"renderer",L"dirt_loose",55,ini);
  UINT fade_start=GetPrivateProfileIntW(L"renderer",L"dirt_fade_start",45,ini),fade_end=GetPrivateProfileIntW(L"renderer",L"dirt_fade_end",60,ini);
- UINT marks=GetPrivateProfileIntW(L"renderer",L"tire_marks",1,ini);rc_prints=marks!=0;
  rc_soft=GetPrivateProfileIntW(L"renderer",L"soft_layer",1,ini)!=0;
  rc_soft_solid=GetPrivateProfileIntW(L"renderer",L"soft_solid",1,ini)!=0;rc_tyre_sink=GetPrivateProfileIntW(L"renderer",L"tyre_sink",1,ini)!=0;
  /* An invalid dirt key disables only this pass, never the renderer. */
@@ -83,7 +82,7 @@ int mxdirt_content_startup(const wchar_t *ini){
  n=game_path(log,n,32768);
  if(n>=4&&n<32767&&log[1]==L':'&&(log[2]==L'\\'||log[2]==L'/'))rc_log=_wfopen(log,L"wb");
  rc_started=1;ok=1;
- mxdirt_content_note("content_ready dirt_material=%d strength=%u loose=%u fade=%u..%u requested=%u tire_marks=%d soft_layer=%d",rc_dirt,strength,loose,fade_start,fade_end,dirt,rc_prints,rc_soft);
+ mxdirt_content_note("content_ready dirt_material=%d strength=%u loose=%u fade=%u..%u requested=%u soft_layer=%d",rc_dirt,strength,loose,fade_start,fade_end,dirt,rc_soft);
 end:SetLastError(error);return ok;
 }
 int mxdirt_content_dirt_enabled(void){return rc_started&&rc_dirt;}
@@ -137,8 +136,7 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
    mxdirt_content_note("dirt_disabled resource_create=1 stage=%d gl_major=%d profile_mask=%d gl_version=%s gl_renderer=%s",stage,major,profile,ver?ver:"?",ren?ren:"?");return -1;}}
  /* The dirt sim's own per-texel state; without it the pass shades from the height delta only. */
  MxDirtState state;memset(&state,0,sizeof(state));rc_state_live=0;
- if(frame->sim_comp){MxDirtSim sim={frame->sim_comp,frame->sim_loose,frame->sim_moist,frame->sim_clods,frame->sim_size,frame->sim_vertex_exact,frame->sim_moisture,frame->sim_compaction0,frame->sim_steps,
-   rc_prints?frame->sim_print:NULL,rc_prints?frame->sim_print_dir:NULL,rc_prints?frame->sim_print_off:NULL};
+ if(frame->sim_comp){MxDirtSim sim={frame->sim_comp,frame->sim_loose,frame->sim_moist,frame->sim_clods,frame->sim_size,frame->sim_vertex_exact,frame->sim_moisture,frame->sim_compaction0,frame->sim_steps};
   rc_state_live=mxdirt_state(rc_cpu,&window,terrain->width,terrain->height,&sim,&state);}
  /* The core's soft top layer (look only), when both sides have it on. */
  MxDirtSoftInput soft;memset(&soft,0,sizeof(soft));int soft_on=0;

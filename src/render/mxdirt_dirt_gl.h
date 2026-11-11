@@ -7,7 +7,7 @@ typedef struct {float strength,base_loose,fade_start,fade_end;} MxDirtLook;
 /* Dirt Material GL owner. GL 4.x compatibility context only, bound to the
    creating context/thread; generation fixed until destroy. Private objects:
    one static 257x257 grid mesh (VBO+IBO+VAO), RG16 window heights, RGBA8
-   generated clods with mips, RGBA8 sim state + tyre prints, three sampler
+   generated clods with mips, RGBA8 sim state, three sampler
    objects, and an RGBA8 native-colour snapshot reallocated at viewport changes. */
 int mxdirt_gl_create(MxDirtGl **,uint64_t generation);
 /* Draws the pass over the native ground just drawn with scope's camera.

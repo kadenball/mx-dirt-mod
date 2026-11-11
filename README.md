@@ -97,7 +97,7 @@ MX-Dirt-Mod-<version>\
 | File | What it is |
 |---|---|
 | `mx_dirt.dlo` | the dirt simulation (ruts, bumps, pre-wear) |
-| `mx_dirt_render.dlo` | the dirt look (shading, tyre marks, soft layer) |
+| `mx_dirt_render.dlo` | the dirt look (shading, soft layer with tyre marks) |
 | `mx_dirt.ini` | simulation settings |
 | `mx_dirt_render.ini` | look settings |
 
@@ -201,7 +201,7 @@ MX Bikes saves only the track's heights. The mod saves the rest of the soil with
 - Shades the ground MX Bikes just drew, using the simulation's state, so every track keeps its own dirt colour.
 - Sharper rut walls and lighting, with shadows cast by the ruts.
 - Damp rut bottoms, dry crests, packed shiny lines and loose crumbly dirt.
-- Tyre prints, roost clods, and the soft dirt layer.
+- Roost clods, and the soft dirt layer with its tyre marks.
 - It fades out with distance (60 m by default) and leaves grass alone.
 
 ### 6. Engine fixes
@@ -257,7 +257,7 @@ Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bike
   - Low: slow, realistic one-rider wear. Your line packs in and bumps stay small.
   - Arcade (hero dirt): not realistic, just fun. Wear builds twice as fast; deep, grippy ruts and tall berms you can rail; less chop; the dirt stays damp all session. Picking it also fills in its own rut depth (80), moisture (45), rolling bumps (30), soft layer (100 mm), look strength (160) and starting wear (End of day), and writes rut capture 150, wall cohesion 150, packed hardness 70, braking bumps 60, drying 0 and roost clods 200 to `mx_dirt.ini`. Picking Low or Medium again puts all of them back.
 - **Dirt:** rut depth, track firmness, moisture, rolling bumps, lines riding with you, and the soft dirt layer thickness.
-- **Look:** dirt look strength and distance, dirt shading on/off, tyre marks on/off.
+- **Look:** dirt look strength and distance, dirt shading on/off.
 - **Record my laps:** needed for pre-wear.
 - **Keep saved wear:** pre-wear only fresh tracks. Turn it off to wear the track again on every load, so wear stacks up.
 - **Online wear:** experimental and untested. See [Online wear](#8-online-wear-experimental-untested).
@@ -319,7 +319,6 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `dirt_strength` | 135 | Strength of the shading, 0–200 %. |
 | `dirt_loose` | 55 | Fine loose grain on worked ground, 0–100 %. |
 | `dirt_fade_start` / `dirt_fade_end` | 45 / 60 | Distance (m) where the look fades out; the end is 60 at most. |
-| `tire_marks` | 1 | Tyre prints from the simulation. |
 | `soft_layer` | 1 | Draw the soft dirt layer. |
 | `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
 | `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |
@@ -459,7 +458,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.5.0   # both + the release zip in build\
+.\package.ps1 -Version 1.5.1   # both + the release zip in build\
 ```
 
 Source layout:

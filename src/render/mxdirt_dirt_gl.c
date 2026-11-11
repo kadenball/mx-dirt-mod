@@ -25,21 +25,21 @@ enum {
 #endif
 #define FN(ret,name,args) ret(APIENTRY *name)args
 enum { GRID_VERTICES=(MXDIRT_CELLS+1)*(MXDIRT_CELLS+1), GRID_INDICES=MXDIRT_CELLS*MXDIRT_CELLS*6 };
-/* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 tyre prints, 5 soft layer. */
-enum { UNITS=6 };
+/* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 soft layer. */
+enum { UNITS=5 };
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
 enum { SOFT_TILE=32,SOFT_SLOTS=64,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
-enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,U_PRINTS,
+enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,
  U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_COUNT };
-static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on","prints",
+static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on",
  "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode"};
 /* Bindings this pass changes and must hand back unchanged. */
 typedef struct {GLint program,active,unpack_buffer,unpack[6],texture[UNITS],sampler[UNITS];} SavedBindings;
 static const GLenum unpack_names[6]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SWAP_BYTES,GL_UNPACK_LSB_FIRST};
 struct MxDirtGl {
  HGLRC context;DWORD thread;uint64_t generation;
- GLuint program,vao,vbo,ibo,heights,background,clods,state,prints,soft,linear,nearest,mipped,wrapped;
- GLint width,height,uniform[U_COUNT];int heights_ready,clods_ready,state_ready,prints_ready,soft_ready;
+ GLuint program,vao,vbo,ibo,heights,background,clods,state,soft,linear,nearest,mipped,wrapped;
+ GLint width,height,uniform[U_COUNT];int heights_ready,clods_ready,state_ready,soft_ready;
  /* perf: the host GL state at the terrain call, queried in full only every MXDIRT_STATE_RECHECK frames (and
     after any skipped frame). Every glGet* makes NVIDIA's threaded driver drain its queue - right after the
     terrain's ~1500 draws ~65 queries a frame serialized the game's render thread with the driver. */
@@ -89,7 +89,7 @@ static GLuint make_sampler(MxDirtGl *p,GLint min,GLint mag,GLint wrap,GLfloat an
 int mxdirt_gl_destroy(MxDirtGl *p){
  if(!p)return 1;if(!owner(p))return 0;GLint program=0,vao=0,buffer=0;glGetIntegerv(X_CURRENT_PROGRAM,&program);glGetIntegerv(X_VERTEX_ARRAY_BINDING,&vao);glGetIntegerv(X_ARRAY_BUFFER_BINDING,&buffer);
  if((p->program&&program==(GLint)p->program)||(p->vao&&vao==(GLint)p->vao)||(p->vbo&&buffer==(GLint)p->vbo))return 0;
- GLuint textures[6]={p->heights,p->background,p->clods,p->state,p->prints,p->soft};for(unsigned k=0;k<6;k++)if(textures[k])glDeleteTextures(1,textures+k);
+ GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft};for(unsigned k=0;k<UNITS;k++)if(textures[k])glDeleteTextures(1,textures+k);
  GLuint samplers[4]={p->linear,p->nearest,p->mipped,p->wrapped};for(unsigned k=0;k<4;k++)if(samplers[k]&&p->delete_samplers)p->delete_samplers(1,samplers+k);
  if(p->program&&p->delete_program)p->delete_program(p->program);if(p->vao&&p->delete_vao)p->delete_vao(1,&p->vao);
  GLuint buffers[2]={p->vbo,p->ibo};for(unsigned k=0;k<2;k++)if(buffers[k]&&p->delete_buffers)p->delete_buffers(1,buffers+k);
@@ -132,10 +132,10 @@ int mxdirt_gl_create(MxDirtGl **out,uint64_t generation){
  if(!p->linear||!p->nearest||!p->mipped||!p->wrapped)goto fail;
  /* Names only; storage is allocated inside the draw scope after unpack state
     has been normalized. Binding once makes each name a GL_TEXTURE_2D. */
- gl_stage=7;GLint previous_texture=0;glGetIntegerv(GL_TEXTURE_BINDING_2D,&previous_texture);GLuint names[6]={0};glGenTextures(6,names);
- p->heights=names[0];p->background=names[1];p->clods=names[2];p->state=names[3];p->prints=names[4];p->soft=names[5];
- for(unsigned k=0;k<6;k++)if(!names[k]){glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);goto fail;}
- for(unsigned k=0;k<6;k++)glBindTexture(GL_TEXTURE_2D,names[k]);glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);
+ gl_stage=7;GLint previous_texture=0;glGetIntegerv(GL_TEXTURE_BINDING_2D,&previous_texture);GLuint names[UNITS]={0};glGenTextures(UNITS,names);
+ p->heights=names[0];p->background=names[1];p->clods=names[2];p->state=names[3];p->soft=names[4];
+ for(unsigned k=0;k<UNITS;k++)if(!names[k]){glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);goto fail;}
+ for(unsigned k=0;k<UNITS;k++)glBindTexture(GL_TEXTURE_2D,names[k]);glBindTexture(GL_TEXTURE_2D,(GLuint)previous_texture);
  gl_stage=8;cells=malloc(sizeof(float)*2*GRID_VERTICES);indices=malloc(sizeof(uint32_t)*GRID_INDICES);if(!cells||!indices)goto fail;
  for(unsigned j=0,n=0;j<=MXDIRT_CELLS;j++)for(unsigned i=0;i<=MXDIRT_CELLS;i++,n++){cells[2*n]=(float)i;cells[2*n+1]=(float)j;}
  for(unsigned j=0,n=0;j<MXDIRT_CELLS;j++)for(unsigned i=0;i<MXDIRT_CELLS;i++){uint32_t a=j*(MXDIRT_CELLS+1)+i,b=a+1,c=a+MXDIRT_CELLS+1,d=c+1;
@@ -186,7 +186,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  if(!scope->serial||!scope->complete)return 0;
  const float *values[]={&look->strength,&look->base_loose,&look->fade_start,&look->fade_end,&w->spacing_x,&w->spacing_z,&w->height_scale,w->texel0,w->texel0+1,w->texel0+2,w->bounds,w->bounds+1,w->bounds+2,w->bounds+3,w->camera,w->camera+1,w->camera+2};
  for(unsigned k=0;k<sizeof(values)/sizeof(*values);k++)if(!isfinite(*values[k]))return -1;
- int state_on=state&&state->valid&&state->rgba;int prints_on=state_on&&state->prints;
+ int state_on=state&&state->valid&&state->rgba;
  int soft_on=soft&&soft->tile&&soft->serial&&soft->side==SOFT_TILE&&soft->tiles_x&&soft->tiles_z&&soft->tiles_x<=65536&&soft->tiles_z<=65536&&
   isfinite(soft->cell)&&soft->cell>=.005f&&soft->cell<=.2f&&isfinite(soft->thickness)&&soft->thickness>0.f&&soft->thickness<=.1f&&isfinite(soft->unit)&&soft->unit>=.0001f&&soft->unit<=.005f&&isfinite(soft->origin_x)&&isfinite(soft->origin_z);
  if(look->strength<0||look->strength>2||look->base_loose<0||look->base_loose>1||!(look->fade_start>=0)||!(look->fade_end>look->fade_start)||!(w->spacing_x>0)||!(w->spacing_z>0)||!(w->height_scale>0))return -1;
@@ -217,19 +217,17 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  const GLint draw_fbo=p->cache.draw_fbo,read_fbo=p->cache.read_fbo,draw_buffer=p->cache.draw_buffer,*viewport=p->cache.viewport,vao=p->cache.vao,buffer=p->cache.buffer,*blend=p->cache.blend,depthfunc=p->cache.depthfunc,*polygon=p->cache.polygon;
  const GLboolean *color=p->cache.color,write=p->cache.write,*enabled=p->cache.enabled,blend_enabled=p->cache.blend_enabled,srgb=p->cache.srgb;const GLfloat offset_factor=p->cache.offset_factor,offset_units=p->cache.offset_units;
  const SavedBindings *saved=&p->cache.saved;
- const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->prints,p->soft},samplers[UNITS]={p->linear,p->nearest,p->mipped,p->linear,p->nearest,p->wrapped};
+ const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft},samplers[UNITS]={p->linear,p->nearest,p->mipped,p->linear,p->wrapped};
  int result=-1;apply_bindings(p,textures,samplers);
  p->active_texture(X_TEXTURE0+2);
  if(!p->clods_ready){unsigned char *rgba=malloc((size_t)MXDIRT_CLOD_SIDE*MXDIRT_CLOD_SIDE*4);if(!rgba)goto restore;mxdirt_clods(rgba);
   glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,MXDIRT_CLOD_SIDE,MXDIRT_CLOD_SIDE,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba);free(rgba);p->generate_mipmap(GL_TEXTURE_2D);
   GLint width=0;glGetTexLevelParameteriv(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&width);if(width!=MXDIRT_CLOD_SIDE)goto restore;p->clods_ready=1;}
- /* Unit3 per-texel sim state, unit4 tyre prints (texelFetch only); same layout as the heights. Neutral = untouched / no print. */
+ /* Unit3 per-texel sim state; same layout as the heights. Neutral = untouched. */
  p->active_texture(X_TEXTURE0+3);
  if(!upload(&p->state_ready,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE,MXDIRT_SIDE,state_on?state->rgba:NULL,4,state_on&&state->changed))goto restore;
- p->active_texture(X_TEXTURE0+4);
- if(!upload(&p->prints_ready,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE,MXDIRT_SIDE,prints_on?state->prints:NULL,4,prints_on&&state->changed))goto restore;
- /* Unit5 soft layer window: neutral once, then only tiles that entered the window or changed. */
- p->active_texture(X_TEXTURE0+5);float soft_window[4]={0,0,0,0};
+ /* Unit4 soft layer window: neutral once, then only tiles that entered the window or changed. */
+ p->active_texture(X_TEXTURE0+4);float soft_window[4]={0,0,0,0};
  if(!p->soft_ready){unsigned char *n=malloc((size_t)SOFT_SIDE*SOFT_SIDE*2);if(!n)goto restore;
   for(size_t i=0;i<(size_t)SOFT_SIDE*SOFT_SIDE;i++){n[2*i]=128;n[2*i+1]=0;}
   glTexImage2D(GL_TEXTURE_2D,0,X_RG8,SOFT_SIDE,SOFT_SIDE,0,X_RG,GL_UNSIGNED_BYTE,n);free(n);glTexParameteri(GL_TEXTURE_2D,X_TEXTURE_MAX_LEVEL,0);
@@ -255,8 +253,8 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  p->u3f(p->uniform[U_TEXEL0],w->texel0[0],w->texel0[1],w->texel0[2]);p->u3f(p->uniform[U_CAMERA],w->camera[0],w->camera[1],w->camera[2]);
  p->u2f(p->uniform[U_SPACING],w->spacing_x,w->spacing_z);p->u1f(p->uniform[U_HEIGHT_SCALE],w->height_scale);p->u2f(p->uniform[U_FADE],look->fade_start,look->fade_end);
  p->u4f(p->uniform[U_BOUNDS],w->bounds[0],w->bounds[1],w->bounds[2],w->bounds[3]);p->u1f(p->uniform[U_STRENGTH],look->strength);p->u1f(p->uniform[U_LOOSE],look->base_loose);
- p->ui(p->uniform[U_STATE],3);p->ui(p->uniform[U_STATE_ON],state_on);p->ui(p->uniform[U_PRINTS],4);
- p->ui(p->uniform[U_SOFT],5);p->ui(p->uniform[U_SOFT_ON],soft_on);
+ p->ui(p->uniform[U_STATE],3);p->ui(p->uniform[U_STATE_ON],state_on);
+ p->ui(p->uniform[U_SOFT],4);p->ui(p->uniform[U_SOFT_ON],soft_on);
  p->u2f(p->uniform[U_SOFT_ORIGIN],soft_on?soft->origin_x:0.f,soft_on?soft->origin_z:0.f);
  p->u4f(p->uniform[U_SOFT_WINDOW],soft_window[0],soft_window[1],soft_window[2],soft_window[3]);
  const int soft_mode=soft_on?(soft->solid?1:0):0;p->ui(p->uniform[U_SOFT_MODE],soft_mode);

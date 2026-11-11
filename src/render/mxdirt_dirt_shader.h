@@ -18,9 +18,10 @@
      faint sheen on hard-pack and wet rut bottoms,
    - worked ground is resurfaced: the native texture's own gravel grain is
      averaged over ~2 cm of ground and replaced by soft clods and crumbs that
-     fade with pixel size instead of sparkling,
-   - tyre prints from the sim's print arrays: a shallow pressed band with knob
-     pits, crisp on intact dirt, gone once the ground is churned loose.
+     fade with pixel size instead of sparkling.
+   (Tyre marks are the soft top layer's: trenches with knob pits. The separate
+   print band drawn from the sim's print arrays was removed in 1.5.1 - it cost
+   frame time and could not be told apart from the soft layer's own marks.)
    Green (grass) pixels are mostly left alone. Fades out by dirt_fade_start..
    dirt_fade_end and at the window edge. Depth/alpha are never written. */
 static const char mxdirt_vertex_shader[]=
@@ -35,7 +36,7 @@ static const char mxdirt_fragment_shader[]=
  "#version 330 compatibility\n"
  "uniform sampler2D heights,background,clods;uniform ivec2 viewport_origin;uniform mat4 view,projection;uniform vec3 texel0;"
  "uniform vec2 spacing,fade;uniform vec4 bounds;uniform vec3 camera;uniform float height_scale,strength,base_grain;"
- "uniform sampler2D state,prints;uniform int state_on;"
+ "uniform sampler2D state;uniform int state_on;"
  "uniform sampler2D soft;uniform int soft_on,soft_mode;uniform vec2 soft_origin;uniform vec4 soft_window;uniform float soft_cell,soft_depth,soft_unit;"
  "in vec2 gv;in vec3 wv;layout(location=0) out vec4 color;"
  "const float SIDE=261.;"
@@ -49,19 +50,6 @@ static const char mxdirt_fragment_shader[]=
  /* integer hash -> 3 uniform values per lattice cell (stable in world space) */
  "vec3 rnd(vec2 id){uvec2 q=uvec2(ivec2(id)+ivec2(1048576));uint h=(q.x*1597334677u)^(q.y*3812015801u);h^=h>>16;h*=2246822519u;h^=h>>13;h*=3266489917u;h^=h>>16;"
  "return vec3(uvec3(h,h>>11,h>>22)&uvec3(2047u,2047u,1023u))/vec3(2047.,2047.,1023.);}"
- /* tyre prints: each texel holds the last tyre line through it (tag: bit7 rear,
-    strength; travel angle mod pi; offset from the texel centre). The tread is a
-    shallow pressed band with knob pits on staggered rows, evaluated against the
-    four nearest texels so the line runs on smoothly across texel borders. */
- "float tyre(vec2 q,vec4 T[4],vec2 C[4],out float band){band=0.;float h=0.;"
- "for(int i=0;i<4;i++){vec4 t=T[i];if(t.r<.003)continue;float rear=step(.5,t.r),st=(t.r*255.-rear*128.)/127.;"
- "float a=t.g*255./256.*3.14159265;vec2 f=vec2(cos(a),sin(a)),n=vec2(-f.y,f.x);vec2 P=C[i]+(t.b*255.-128.)/100.*spacing.x*n;"
- "float ac=dot(q-P,n),al=dot(q-C[i],f),hw=mix(.045,.062,rear);"
- "float inside=(1.-smoothstep(hw-.008,hw+.004,abs(ac)))*(1.-smoothstep(.75,.95,abs(al)/spacing.x));if(inside<=0.)continue;"
- "float x=ac/hw,s=dot(q,f)/mix(.05,.056,rear)+(abs(x)>.42?.5:0.);"
- "float km=smoothstep(.3,.18,abs(fract(s)-.5))*(1.-smoothstep(.8,.97,abs(x)));"
- "h=min(h,-(.3+.7*km)*inside*st);band=max(band,inside*st);}"
- "return h;}"
  "void main(){vec2 g=gv;vec3 w=wv;gl_FragDepth=gl_FragCoord.z;"
  /* metres of ground per pixel: every procedural layer fades out before it aliases */
  "vec2 p=w.xz,dpx=dFdx(p),dpy=dFdy(p);float px=max(length(dpx),length(dpy));"
@@ -75,7 +63,7 @@ static const char mxdirt_fragment_shader[]=
     is where the bike's tyre actually rolls.
     soft_mode bit 0 - solid layer: the soil the ray hits belongs to the ground point under it, a little
     toward the camera, so everything from here on (the native ground texture, the height field, the sim
-    state, the prints) is taken at THAT ground point. The relief then carries the ground with it like real
+    state) is taken at THAT ground point. The relief then carries the ground with it like real
     displaced dirt; lit on the texture of the mesh point behind it, it read as a translucent sheet floating
     over the ground.
     soft_mode bit 2 - depth-only draw: only where the layer stands above the mesh, at the depth of its
@@ -190,18 +178,6 @@ static const char mxdirt_fragment_shader[]=
  /* loose soil reads soft: texture grain averaged, fine crumbs; pressed floors smooth */
  "float sl_loose=s_lay*(1.-s_press*s_vis)*(1.-.6*worked);"
  "albedo=mix(albedo,blur/bw,.18*sl_loose);micro+=turn((k2.rg-.5)*2.,-.83)*.16*sl_loose*f_mid;}"
- /* tyre prints: crisp on intact dirt, gone once the ground is churned loose or
-    chopped up; the knob pattern fades by pixel size, the pressed band stays */
- "float pband=0.;"
- /* perf: the print band is gone by px 9 cm and fully replaced by the soft layer's own prints where s_vis is 1 */
- "if(state_on!=0&&px<.09&&s_vis<.995){vec2 tc=g-.5;ivec2 tb=ivec2(floor(tc));vec4 T[4];vec2 C[4];"
- "for(int i=0;i<4;i++){ivec2 ti=clamp(tb+ivec2(i&1,i>>1),ivec2(0),ivec2(int(SIDE)-1));T[i]=texelFetch(prints,ti,0);C[i]=p+(vec2(ti)-tc)*spacing;}"
- "float b0,b1,b2,h0=tyre(p,T,C,b0),hx=h0,hz=h0;if(px<.032){hx=tyre(p+vec2(.004,0),T,C,b1);hz=tyre(p+vec2(0,.004),T,C,b2);}" /* knob relief only where it shows */
- "float intact=(1.-smoothstep(.35,.7,s_loose))*(1.-smoothstep(.1,.35,s_clod));" /* damage = churned loose soil / roost, not rut curvature */
- /* own fades: the 12 cm band reads until ~5 cm pixels, the ~5.5 cm knob rows until ~2.5 cm */
- "float pfb=1.-smoothstep(.04,.09,px),pfk=1.-smoothstep(.014,.032,px);"
- "pband=b0*intact*pfb*(1.-s_vis);float depth=.007*(.6+.4*damp)*intact*pfk*(1.-s_vis);" /* the soft layer draws its own prints up close */
- "micro=micro*(1.-.6*pband)+vec2(hx-h0,hz-h0)/.004*depth;}"
  /* roost clods: lumps on a jittered 11 cm lattice, present where the sim's clod
     density at the lump's own centre beats its random rank; lit as domes with a
     soft contact shadow cast away from the sun. ~2-5 cm, bigger when damp. */
@@ -229,7 +205,7 @@ static const char mxdirt_fragment_shader[]=
  "float ao=(1.-clamp(hollow*3.,0.,.16)*worked)*(1.-clamp(s_cav*5.,0.,.2)*s_vis);"
  /* damp soil darker and richer; dry crests and old hardpack a little lighter and duller */
  "float lum=dot(albedo,vec3(.299,.587,.114));"
- "float sat=1.+.22*wetv-.20*dryv-.04*firm+.06*pband*damp+.05*s_press*s_vis,val=1.-.18*wetv+.07*dryv+.03*firm*(1.-damp)-.10*pband*(.4+.6*damp);" /* pressed prints read a little darker */
+ "float sat=1.+.22*wetv-.20*dryv-.04*firm+.05*s_press*s_vis,val=1.-.18*wetv+.07*dryv+.03*firm*(1.-damp);"
  /* soft layer: pressed trench floors darker; soil lying above the layer top (lips, roost crumbs) is loose
     and dry, so it reads LIGHTER and dustier than packed ground - most while it is FRESH (s_new: the last few
     laps), so the latest passes stand out and the dark ruts stay easy to read against it. A fresh trench

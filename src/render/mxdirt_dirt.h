@@ -44,16 +44,11 @@ void mxdirt_clods(unsigned char *rgba);
 /* Dirt sim state per height-window texel (same SIDE*SIDE layout as the
    heights): RGBA8 {packed, loose, wetness, roost clods}. Built from the core's
    borrowed sim arrays (rows run with -z, see mxdirt_frame.h); rebuilt only
-   when the sim stepped or the window moved. print/print_dir/print_off may be
-   NULL (tyre prints off): the prints texture is then neutral. */
+   when the sim stepped or the window moved. */
 typedef struct {
  const uint8_t *comp;const float *loose;const int8_t *moist;const uint8_t *clods;
  uint32_t size,vertex_exact;float moisture,compaction0;uint64_t steps;
- const uint8_t *print,*print_dir;const int8_t *print_off;
 } MxDirtSim;
-/* prints: RGBA8 {tag (bit7 rear, bits0..6 strength), travel angle mod pi (1/256
-   of pi), line offset from THIS window texel centre along the travel normal
-   (cell/100, +128), 0}. */
-typedef struct {int valid,changed;const unsigned char *rgba,*prints;} MxDirtState;
+typedef struct {int valid,changed;const unsigned char *rgba;} MxDirtState;
 int mxdirt_state(MxDirt *,const MxDirtWindow *,uint32_t grid_width,uint32_t grid_height,const MxDirtSim *,MxDirtState *out);
 #endif
