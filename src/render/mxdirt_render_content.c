@@ -14,7 +14,7 @@
 #include <wchar.h>
 static DWORD rc_thread;
 static int rc_started,rc_live,rc_retire,rc_fault;
-static int rc_dirt,rc_dirt_fault,rc_prints=1,rc_soft=1,rc_soft_live;
+static int rc_dirt,rc_dirt_fault,rc_prints=1,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1;
 static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;
 static uint64_t rc_serial,rc_peak,rc_ticks,rc_recentres,rc_frames,rc_skips,rc_generation;
 static int rc_state_live;static MxDirtStats rc_stats;
@@ -75,6 +75,7 @@ int mxdirt_content_startup(const wchar_t *ini){
  UINT fade_start=GetPrivateProfileIntW(L"renderer",L"dirt_fade_start",45,ini),fade_end=GetPrivateProfileIntW(L"renderer",L"dirt_fade_end",60,ini);
  UINT marks=GetPrivateProfileIntW(L"renderer",L"tire_marks",1,ini);rc_prints=marks!=0;
  rc_soft=GetPrivateProfileIntW(L"renderer",L"soft_layer",1,ini)!=0;
+ rc_soft_solid=GetPrivateProfileIntW(L"renderer",L"soft_solid",1,ini)!=0;rc_tyre_sink=GetPrivateProfileIntW(L"renderer",L"tyre_sink",1,ini)!=0;
  /* An invalid dirt key disables only this pass, never the renderer. */
  rc_dirt=dirt==1&&strength<=200&&loose<=100&&fade_start<fade_end&&fade_end<=60;
  rc_look.strength=(float)strength/100.f;rc_look.base_loose=(float)loose/100.f;rc_look.fade_start=(float)fade_start;rc_look.fade_end=(float)fade_end;
@@ -143,7 +144,7 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
  MxDirtSoftInput soft;memset(&soft,0,sizeof(soft));int soft_on=0;
  if(rc_soft&&frame->soft_tile&&frame->soft_tile_serial){
   soft.tile=frame->soft_tile;soft.serial=frame->soft_tile_serial;soft.tiles_x=frame->soft_tiles_x;soft.tiles_z=frame->soft_tiles_z;soft.side=frame->soft_tile_side;
-  soft.cell=frame->soft_cell_m;soft.thickness=frame->soft_thickness_m;soft.unit=(float)frame->soft_unit_um*1e-6f;soft.origin_x=frame->origin_m[0];soft.origin_z=frame->origin_m[2];soft_on=1;}
+  soft.cell=frame->soft_cell_m;soft.thickness=frame->soft_thickness_m;soft.unit=(float)frame->soft_unit_um*1e-6f;soft.origin_x=frame->origin_m[0];soft.origin_z=frame->origin_m[2];soft.solid=rc_soft_solid;soft.sink=rc_tyre_sink;soft_on=1;}
  rc_soft_live=soft_on;
  int result=mxdirt_gl_draw(rc_gl,scope,&window,&rc_look,&state,soft_on?&soft:NULL);rc_ticks=rc_elapsed(start);
  if(rc_ticks>rc_peak)rc_peak=rc_ticks;

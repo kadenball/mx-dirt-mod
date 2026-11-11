@@ -30,9 +30,9 @@ enum { UNITS=6 };
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
 enum { SOFT_TILE=32,SOFT_SLOTS=64,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
 enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,U_PRINTS,
- U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_COUNT };
+ U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_COUNT };
 static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on","prints",
- "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit"};
+ "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode"};
 /* Bindings this pass changes and must hand back unchanged. */
 typedef struct {GLint program,active,unpack_buffer,unpack[6],texture[UNITS],sampler[UNITS];} SavedBindings;
 static const GLenum unpack_names[6]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SWAP_BYTES,GL_UNPACK_LSB_FIRST};
@@ -259,11 +259,17 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  p->ui(p->uniform[U_SOFT],5);p->ui(p->uniform[U_SOFT_ON],soft_on);
  p->u2f(p->uniform[U_SOFT_ORIGIN],soft_on?soft->origin_x:0.f,soft_on?soft->origin_z:0.f);
  p->u4f(p->uniform[U_SOFT_WINDOW],soft_window[0],soft_window[1],soft_window[2],soft_window[3]);
+ const int soft_mode=soft_on?(soft->solid?1:0):0;p->ui(p->uniform[U_SOFT_MODE],soft_mode);
  p->u1f(p->uniform[U_SOFT_CELL],soft_on?soft->cell:.025f);p->u1f(p->uniform[U_SOFT_DEPTH],soft_on?soft->thickness:.03f);p->u1f(p->uniform[U_SOFT_UNIT],soft_on?soft->unit:.001f);
  p->disable_indexed(GL_BLEND,0);p->color(0,1,1,1,0);
  glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_FALSE);for(unsigned k=1;k<8;k++)glDisable(caps[k]);glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
  glDisable(X_FRAMEBUFFER_SRGB);glEnable(GL_POLYGON_OFFSET_FILL);glPolygonOffset(-1.f,-1.f);
  p->bind_vao(p->vao);glDrawElements(GL_TRIANGLES,GRID_INDICES,GL_UNSIGNED_INT,(void*)0);result=1;
+ /* Tyre sink: a second, depth-only draw of the soft layer where it stands above the mesh, at the depth of
+    its surface (the shader discards everything else), so the bike drawn after the terrain is hidden where
+    it is down in the loose soil. Colour is not touched; native depth elsewhere is not touched. */
+ if(soft_on&&soft->sink){p->ui(p->uniform[U_SOFT_MODE],soft_mode|4);p->color(0,0,0,0,0);glDepthMask(GL_TRUE);
+  glDrawElements(GL_TRIANGLES,GRID_INDICES,GL_UNSIGNED_INT,(void*)0);}
 restore:
  if(blend_enabled)p->enable_indexed(GL_BLEND,0);else p->disable_indexed(GL_BLEND,0);p->blend(0,(GLenum)blend[0],(GLenum)blend[1],(GLenum)blend[2],(GLenum)blend[3]);p->equation(0,(GLenum)blend[4],(GLenum)blend[5]);p->color(0,color[0],color[1],color[2],color[3]);
  for(unsigned k=0;k<8;k++)toggle(caps[k],enabled[k]);toggle(X_FRAMEBUFFER_SRGB,srgb);glPolygonOffset(offset_factor,offset_units);glDepthFunc((GLenum)depthfunc);glDepthMask(write);

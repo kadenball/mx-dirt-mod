@@ -24,6 +24,7 @@ int mxdirt_gl_create(MxDirtGl **,uint64_t generation);
 typedef struct {
  const uint8_t *const *tile;const uint32_t *serial;uint32_t tiles_x,tiles_z,side;
  float cell,thickness,unit,origin_x,origin_z; /* unit: m per height step; origin: world x,z of grid vertex (0,0) */
+ int solid,sink; /* solid: the ground texture follows the relief; sink: also write the raised layer's depth (the bike sinks into it) */
 } MxDirtSoftInput;
 int mxdirt_gl_draw(MxDirtGl *,const MxDirtCameraScope *,const MxDirtWindow *,const MxDirtLook *,const MxDirtState *state,const MxDirtSoftInput *soft);
 /* Returns 0 (keeping everything) when not on the owner context/thread or when

@@ -83,6 +83,9 @@ static unsigned ra_dirt_sim_depth=60,ra_dirt_sim_firmness=55,ra_dirt_sim_moistur
 static unsigned ra_bumps_percent=100,ra_rolling_bumps_percent=60;
 static unsigned ra_hardness_percent=100,ra_breakdown_percent=100,ra_drying_percent=100,ra_sweep_percent=100;
 static unsigned ra_extra_riders=0,ra_live_gate=1,ra_live_wear=100;
+/* Online wear (EXPERIMENTAL, [online] online_wear=1): active in online race events too, and the other riders wear the track
+   (mxdirt_remote.h). ra_online: this event is a race. No pre-wear, ghosts, lap recording or saved soil / marks there. */
+static unsigned ra_online_wear=0,ra_online_echo=0;static int ra_online;
 /* sharp_ruts (vertex-exact publication) is opt-in: the native mesh's fixed
    triangle split turns narrow ruts running along one diagonal into teeth. */
 static unsigned ra_sharp_ruts=0,ra_capture_percent=100,ra_cohesion_percent=100,ra_clods_percent=100;static int ra_sharp_live;
@@ -308,6 +311,10 @@ static void ra_flush(void) {
    fprintf(ra_log,"{\"active\":true,\"kind\":\"step_timing\",\"frames\":%llu,\"mean_ms\":{\"contacts\":%.4f,\"dirt_sim\":%.4f,\"height_convert\":%.4f},\"max_ms\":{\"contacts\":%.3f,\"dirt_sim\":%.3f,\"height_convert\":%.3f}}\n",
     (unsigned long long)frames,total[0]/frames,total[1]/frames,total[2]/frames,peak[0],peak[1],peak[2]);}
  {double st[6];if(ra_session&&mxdirt_session_dirt_sim_stats(ra_session,st))
+   {MxdirtRemoteState rs;LARGE_INTEGER c,f;QueryPerformanceCounter(&c);QueryPerformanceFrequency(&f);
+    if(f.QuadPart>0&&mxdirt_session_remote_state(ra_session,(double)c.QuadPart/(double)f.QuadPart,&rs))
+     fprintf(ra_log,"{\"active\":true,\"kind\":\"online_riders\",\"experimental\":true,\"calibrated\":%s,\"layout\":%d,\"own_race_number\":%d,\"riders\":%d,\"passes\":%llu,\"position_batches\":%llu,\"calibrations\":%llu,\"reference_ahead_m\":%.3f,\"reference_height_m\":%.3f}\n",
+      rs.calibrated?"true":"false",rs.map,rs.self_num,rs.riders,(unsigned long long)rs.passes,(unsigned long long)rs.batches,(unsigned long long)rs.locks,(double)rs.ref_off,(double)rs.y_off);}
    fprintf(ra_log,"{\"active\":true,\"kind\":\"dirt_sim\",\"volume_error_m3\":%.6g,\"cut_m3\":%.6g,\"compacted_m3\":%.6g,\"roost_m3\":%.6g,\"dust_m3\":%.6g,\"relax_moves\":%.0f,\"ghost_passes\":%llu}\n",
     st[0],st[1],st[2],st[3],st[4],st[5],(unsigned long long)mxdirt_session_ghost_passes(ra_session));}
  MxbTransportState s;if(ra_transport&&mxb_transport_state(ra_transport,&s))
@@ -434,8 +441,10 @@ static void ra_ghost_free(void);
 static void ra_soft_save(void);
 static void ra_soil_save(void);
 static void ra_solver_destroy(void){
+ if(!ra_online){
  ra_soft_save(); /* the track keeps its soft-layer marks with its saved wear */
  ra_soil_save(); /* and the dirt sim's packing, loose soil, moisture and prints */
+ }
  mxdirt_session_destroy(ra_session);ra_session=NULL;ra_ghost_free(); /* laps were borrowed by that session */
 }
 #include "mxdirt_laps.inc"
@@ -511,10 +520,12 @@ static int ra_setup(void) {
  stage="grid_changed";
  if(!ra_grid_read(&last)||memcmp(&first,&last,sizeof(first))){ra_solver_destroy();goto end;}
  ra_grid=first;ra_rebind=1;ok=1;
- {uint64_t sw=mxdirt_session_saved_wear(ra_session,.015);
-  ra_soil_setup(sw); /* optional: the saved packing / loose soil / moisture / prints of a ridden track */
+ {uint64_t sw=ra_online?0:mxdirt_session_saved_wear(ra_session,.015); /* an online race never loads this PC's saved soil or marks */
+  if(!ra_online)ra_soil_setup(sw); /* optional: the saved packing / loose soil / moisture / prints of a ridden track */
   ra_soft_setup(ra_soft_mm?sw:0);} /* optional, display only */
- ra_ghost_load(); /* optional: no laps or a bad file never fails setup */
+ if(!ra_online)ra_ghost_load(); /* optional: no laps or a bad file never fails setup. Online: no pre-wear, no ghosts (every player has other laps) */
+ if(ra_online||ra_online_echo){int on=mxdirt_session_set_remote(ra_session,1,ra_sim_material(7));
+  if(ra_log){fprintf(ra_log,"{\"kind\":\"online_wear\",\"experimental\":true,\"race_event\":%s,\"remote_riders\":%s,\"echo_test\":%u}\n",ra_online?"true":"false",on?"true":"false",ra_online_echo);fflush(ra_log);}}
  if(ra_log){fprintf(ra_log,"{\"active\":true,\"kind\":\"rut_shape\",\"sharp_ruts\":%d,\"requested\":%u,\"capture_percent\":%u,\"cohesion_percent\":%u,\"clods_percent\":%u}\n",ra_sharp_live,ra_sharp_ruts,ra_capture_percent,ra_cohesion_percent,ra_clods_percent);fflush(ra_log);}
 end:if(!ok)ra_solver_destroy();free(base);free(dfm);QueryPerformanceCounter(&end);RaRecord *r=ra_record(RA_SETUP,ok);
  if(r){r->solver_ms=(double)(end.QuadPart-start.QuadPart)*1000./freq.QuadPart;ra_done(r);}
@@ -608,7 +619,7 @@ static void ra_complete_frame(int elapsed) {
  const int soil_material[2]={ra_sim_material(ra_meta[0].material),ra_sim_material(ra_meta[1].material)};
  for(int w=0;w<2;w++){int m=ra_meta[w].material;ra_surface_frames[m>=0&&m<16?m:15]++;}
  if(!mxdirt_session_step(ra_session,frames,soil_material,&stats)){ra_fault(-107);return;}
- ra_ghost_record_frame((float)f.dt);
+ if(!ra_online)ra_ghost_record_frame((float)f.dt);
  QueryPerformanceCounter(&end);double ms=(double)(end.QuadPart-start.QuadPart)*1000./freq.QuadPart;
  ra_solver_frames++;ra_solver_total_ms+=ms;if(ms>ra_solver_max_ms)ra_solver_max_ms=ms;
  for(int w=0;w<2;w++)ra_last_position[w]=f.postintegration[w];
@@ -923,6 +934,8 @@ API int Startup(char *savepath) {
     !ra_ini_uint("soil","follow_game_deformation",1,0,1,&ra_follow_game_deformation)||
     !ra_ini_uint("soil","game_deformation_reference_percent",25,1,200,&ra_game_deformation_reference)||
     !ra_ini_uint("soil","live_wear_percent",100,0,200,&ra_live_wear)||
+    !ra_ini_uint("online","online_wear",0,0,1,&ra_online_wear)||
+    !ra_ini_uint("debug","online_echo",0,0,1,&ra_online_echo)||
     !ra_ini_uint("debug","dump_terrain",0,0,1,&dump))return -1;
  ra_dump_terrain=dump;
  ra_live_gate=GetPrivateProfileIntA("soil","live_gate_lines",1,ra_ini);if(ra_live_gate<1||ra_live_gate>8)ra_live_gate=1;
@@ -932,10 +945,10 @@ API int Startup(char *savepath) {
  LARGE_INTEGER frequency;QueryPerformanceFrequency(&frequency);
  fprintf(ra_log,"{\"active\":true,\"kind\":\"startup\",\"plugin\":\"mx_dirt\",\"schema\":1,\"qpc_frequency\":%lld,\"exe_sha256\":\"%s\",\"load_tau_s\":%.3g,\"height_response\":%.3g}\n",
   frequency.QuadPart,ra_verified_hash,(double)MXDIRT_LOAD_TAU_S,(double)RA_HEIGHT_RESPONSE);
- fprintf(ra_log,"{\"kind\":\"config\",\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"packed_hardness_percent\":%u,\"breakdown_percent\":%u,\"drying_percent\":%u,\"sweep_percent\":%u,\"sharp_ruts\":%u,\"rut_capture_percent\":%u,\"wall_cohesion_percent\":%u,\"roost_clods_percent\":%u,\"prewear_riders\":%u,\"prewear_spread_cm\":%u,\"prewear_clip_cm\":%u,\"prewear_fresh_only\":%u,\"soft_layer_mm\":%u,\"extra_riders\":%u,\"live_gate_lines\":%u,\"live_wear_percent\":%u,\"ghost_riders\":%u,\"record_ghosts\":%u,\"follow_game_deformation\":%u,\"game_deformation_reference_percent\":%u,\"sand_tracks\":\"%s\",\"dump_terrain\":%u}\n",
+ fprintf(ra_log,"{\"kind\":\"config\",\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"packed_hardness_percent\":%u,\"breakdown_percent\":%u,\"drying_percent\":%u,\"sweep_percent\":%u,\"sharp_ruts\":%u,\"rut_capture_percent\":%u,\"wall_cohesion_percent\":%u,\"roost_clods_percent\":%u,\"prewear_riders\":%u,\"prewear_spread_cm\":%u,\"prewear_clip_cm\":%u,\"prewear_fresh_only\":%u,\"soft_layer_mm\":%u,\"extra_riders\":%u,\"live_gate_lines\":%u,\"live_wear_percent\":%u,\"ghost_riders\":%u,\"record_ghosts\":%u,\"follow_game_deformation\":%u,\"game_deformation_reference_percent\":%u,\"sand_tracks\":\"%s\",\"dump_terrain\":%u,\"online_wear\":%u}\n",
   ra_dirt_sim_depth,ra_dirt_sim_firmness,ra_dirt_sim_moisture,ra_bumps_percent,ra_rolling_bumps_percent,ra_hardness_percent,ra_breakdown_percent,ra_drying_percent,ra_sweep_percent,ra_sharp_ruts,ra_capture_percent,ra_cohesion_percent,ra_clods_percent,
   ra_prewear_riders,ra_prewear_spread_cm,ra_prewear_clip_cm,ra_prewear_fresh_only,ra_soft_mm,ra_extra_riders,ra_live_gate,ra_live_wear,ra_ghost_riders,ra_record_ghosts,ra_follow_game_deformation,ra_game_deformation_reference,
-  strchr(ra_sand_tracks,'"')||strchr(ra_sand_tracks,'\\')?"?":ra_sand_tracks,ra_dump_terrain);
+  strchr(ra_sand_tracks,'"')||strchr(ra_sand_tracks,'\\')?"?":ra_sand_tracks,ra_dump_terrain,ra_online_wear);
  fflush(ra_log);
  return 3; /* telemetry is unused */
 }
@@ -954,8 +967,10 @@ API void EventInit(void *data,int size) {
  InterlockedExchange(&ra_new_run,0);InterlockedExchange(&ra_foreign,0);ra_applied_token=ra_reset_token;
  memset(ra_physics,0,sizeof(ra_physics));
  if(!data||size<(int)sizeof(RaEvent)||ra_generation==UINT64_MAX)return;
- RaEvent e;if(!ra_read(NULL,(uint64_t)(uintptr_t)data,&e,sizeof(e))||e.type!=1||
+ /* Testing (type 1) always; an online race (type 2) only with the experimental [online] online_wear=1. */
+ RaEvent e;if(!ra_read(NULL,(uint64_t)(uintptr_t)data,&e,sizeof(e))||(e.type!=1&&!(e.type==2&&ra_online_wear))||
     !memchr(e.trackID,0,sizeof(e.trackID))||!ra_track_select_event(e.trackID))return;
+ ra_online=e.type==2;
  ra_flush_first_fault();memset(&ra_first_fault,0,sizeof(ra_first_fault));
  /* Both engine fixes must be in place before any session starts on this track. */
  const char *why="";int patched=mxdirt_patches_install(ra_image,&why);
@@ -1013,6 +1028,24 @@ API __declspec(noinline) void RunStop(void){
 }
 API void RunDeinit(void){RunStop();ra_bootstrap_abort(-10);if(GetCurrentThreadId()==ra_owner&&!ra_inflight&&!ra_bootstrap_remove())ra_fault(-129);}
 API void RunTelemetry(void *data,int size,float time,float pos){(void)data;(void)size;(void)time;(void)pos;}
+/* Online wear (experimental): where the game says every bike is. Only copied here; the session turns the
+   other bikes' tracks into tyre passes on its next step, once the layout of these positions has been
+   proven against the local bike (mxdirt_remote.h). */
+typedef struct {int num;float x,y,z,yaw,track;int crashed;} RaTrackPosition;
+API void RaceTrackPosition(int count,void *array,int elem){
+ DWORD incoming=GetLastError();
+ if(GetCurrentThreadId()==ra_owner&&ra_session&&(ra_online||ra_online_echo)&&!ra_fatal&&!ra_inflight&&
+    InterlockedCompareExchange(&ra_allowed,0,0)&&array&&count>0&&elem>=(int)sizeof(RaTrackPosition)&&elem<=256){
+  MxdRemotePos pos[65];int n=0;if(count>64)count=64;
+  for(int i=0;i<count;i++){RaTrackPosition t;if(!ra_read(NULL,(uint64_t)(uintptr_t)array+(uint64_t)i*(uint64_t)elem,&t,sizeof(t)))break;
+   pos[n].num=t.num;pos[n].p[0]=t.x;pos[n].p[1]=t.y;pos[n].p[2]=t.z;pos[n].crashed=t.crashed;n++;}
+  /* [debug] online_echo=1 (offline test): a copy of every reported bike riding 3 m beside it */
+  if(ra_online_echo&&n){int m=n<32?n:32;for(int i=0;i<m&&n<65;i++){pos[n]=pos[i];pos[n].num=pos[i].num+100000;pos[n].p[0]+=3.f;n++;}}
+  LARGE_INTEGER c,f;QueryPerformanceCounter(&c);QueryPerformanceFrequency(&f);
+  if(n&&f.QuadPart>0)mxdirt_session_remote_feed(ra_session,pos,n,(double)c.QuadPart/(double)f.QuadPart);
+ }
+ SetLastError(incoming);
+}
 API void EventDeinit(void){
  InterlockedExchange(&ra_allowed,0);RunStop();ra_bootstrap_abort(-11);
  if(GetCurrentThreadId()==ra_owner&&!ra_inflight){

@@ -71,7 +71,8 @@ $Chk=@(
   @('renderer','renderer','dirt_material','Dirt shading (ruts, damp dirt, prints)',1),
   @('renderer','renderer','tire_marks','Tyre marks',1),
   @('active','soil','record_ghosts','Record my laps (needed for track wear)',1),
-  @('active','soil','prewear_fresh_only','Keep saved wear (only pre-wear fresh tracks)',1)
+  @('active','soil','prewear_fresh_only','Keep saved wear (only pre-wear fresh tracks)',1),
+  @('active','online','online_wear','Online wear - EXPERIMENTAL, untested (other riders wear the track too)',0)
 )
 
 # ---- form ----

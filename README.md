@@ -46,7 +46,7 @@ Prefer copying files yourself? See [Manual install](#manual-install-no-installer
   - The mod hooks fixed places in that exact executable.
   - With any other game version it switches itself off and the game runs normally, until a release for that version is out. Nothing breaks.
 - A graphics card with OpenGL 4 (any GPU from the last ten years).
-- **Testing sessions, offline.** The mod does nothing in online races.
+- **Testing sessions, offline.** By default the mod does nothing in online races. An experimental, **untested** option turns it on there: see [Online wear](#8-online-wear-experimental-untested).
 
 You do **not** need to install anything else: no downloads, no Python, no admin rights.
 
@@ -180,6 +180,12 @@ MX Bikes saves only the track's heights. The mod saves the rest of the soil with
   - with crumbs roosted back when you spin
   - with a mound shoved ahead when you lock the brakes
   - pushed to one side when you slide
+- The marks have character:
+  - A spinning rear tyre scoops an uneven row of scallops into the floor.
+  - A locked or dragging tyre smears a wider, shallower groove with drag lines.
+  - A front tyre leaves a low rib down the middle of its groove.
+- The trench line weaves a little and its walls break here and there, like a tyre in real dirt, instead of a ruled line.
+- Loose soil is lighter and dustier than packed ground, so the dark ruts stay easy to read. Freshly moved soil is lightest and crisp; it settles and smooths out over a few laps (about 4–5 minutes), so your latest passes stand out.
 - It follows the dirt simulation:
   - It lies deeper on loose soil and on a softer track.
   - It is thinner, and ironed flat, on packed lines.
@@ -187,7 +193,7 @@ MX Bikes saves only the track's heights. The mod saves the rest of the soil with
   - Sand lies deep; hard-pack and gravel carry only a thin skin.
   - Loose soil the simulation throws around (berms beside the line, soil shoved into bump rows, roost behind a spinning tyre) falls into the trenches and buries old prints. Untouched ground stays clean.
   - The in-game Deformation slider scales it like the ruts (slider at 0: no layer).
-- Up close it's drawn with real depth (parallax) and its own shadows.
+- Up close it's drawn with real depth (parallax) and its own shadows. The ground's own texture moves with the relief, so it reads as solid dirt, and the tyres sit in the loose soil instead of on top of it.
 - It's **a look only**: the bike rides the dirt simulation's ruts under it. The layer is drawn lying on top of that ridden ground, so a pressed trench floor is where the tyre actually rolls.
 - Its marks are saved with the track in `plugins\mx_dirt_soft\<track>\`.
 
@@ -212,6 +218,26 @@ You can turn off the raised dirt surface fix with `raised_dirt_surface=0` in `mx
 ### 7. Launcher
 A small settings window. See [The launcher](#the-launcher).
 
+### 8. Online wear (experimental, untested)
+**This has never been run on a real server.** It is tested offline only, against simulated riders and recorded laps. Try it, and please report what happens.
+
+Off by default. Turn it on with **Online wear** in the launcher, or `online_wear=1` under `[online]` in `mx_dirt.ini`.
+
+- With it on, the mod also runs in online races, and **the other riders wear the track too**.
+- MX Bikes only tells a plugin where each bike is. The mod makes up the other riders' tyre passes from that: speed, heading, braking, acceleration and turning.
+  - A rider in the air or crashed leaves no marks.
+  - A made-up pass wears about as much as one of yours.
+- Before anyone else wears anything, the mod checks the reported positions against your own bike, which it knows exactly. Ride about 60 m first. If the check never passes, the other riders are ignored and only your own wear runs.
+- **Every player needs the mod, the same version and the same settings.** Each PC builds its own track from what it sees.
+  - Tracks are similar between players, never identical.
+  - A player without the mod sees no ruts at all, and sees your bike riding in ruts that are not there for them.
+  - A player who joins late starts with a fresh track.
+- Online there is no pre-wear, no lap recording, and nothing is saved or loaded: an online track always starts fresh and is gone when you leave.
+- Other riders are assumed to ride on dirt. Where they ride over concrete or wood, they can leave marks there too.
+- Check with the server's host before using it in a real race.
+
+After a session, `plugins\mx_dirt.jsonl` has an `online_riders` line: whether the position check passed, how many riders were seen and how many tyre passes they made. That line is the most useful thing to send with a report.
+
 ---
 
 ## The launcher
@@ -234,6 +260,7 @@ Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bike
 - **Look:** dirt look strength and distance, dirt shading on/off, tyre marks on/off.
 - **Record my laps:** needed for pre-wear.
 - **Keep saved wear:** pre-wear only fresh tracks. Turn it off to wear the track again on every load, so wear stacks up.
+- **Online wear:** experimental and untested. See [Online wear](#8-online-wear-experimental-untested).
 - **Saved track wear → Reset this track's wear:** the chosen track starts fresh next time. Its saved wear is moved to the backup folder, not deleted.
 - **Recommended:** fills in the default settings; press Save to keep them.
 - **Save / Save & start MX Bikes**
@@ -277,7 +304,9 @@ All settings live in two text files in `MX Bikes\plugins`, with comments. The la
 | `follow_game_deformation` | 1 | 0/1 | Rut depth follows the in-game Deformation slider. |
 | `game_deformation_reference_percent` | 25 | 1–200 | Slider value at which rut depth applies unchanged. |
 | `sand_tracks` | (empty) | text | Track-name fragments to treat as sand, comma separated. |
+| `[online] online_wear` | 0 | 0/1 | Experimental, untested: run in online races and let the other riders wear the track. |
 | `[debug] dump_terrain` | 0 | 0/1 | Save each track's terrain for offline analysis. |
+| `[debug] online_echo` | 0 | 0/1 | Test of the online riders in Testing: a copy of your bike rides 3 m beside you. |
 
 An out-of-range value switches the simulation off for that game start, and the reason is written to `plugins\mx_dirt.jsonl`.
 
@@ -292,6 +321,8 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `dirt_fade_start` / `dirt_fade_end` | 45 / 60 | Distance (m) where the look fades out; the end is 60 at most. |
 | `tire_marks` | 1 | Tyre prints from the simulation. |
 | `soft_layer` | 1 | Draw the soft dirt layer. |
+| `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
+| `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |
 | `raised_dirt_surface` | 1 | Raised-dirt surface fix. |
 | `content_log` | `plugins\mx_dirt_render.log` | Diagnostic log; empty = none. |
 
@@ -428,7 +459,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.4.1   # both + the release zip in build\
+.\package.ps1 -Version 1.5.0   # both + the release zip in build\
 ```
 
 Source layout:

@@ -99,12 +99,14 @@ static uint32_t return_rva(void *ret){
  uintptr_t p=(uintptr_t)ret,b=(uintptr_t)image_base;
  return p>=b&&p-b<image_size?(uint32_t)(p-b):0;
 }
+static int online_wear; /* the core's experimental [online] online_wear (plugins\mx_dirt.ini): online races too */
 static int event_valid(const RenderEvent *e){
  /* A terminated track ID without control characters, quotes or backslashes,
-    in a testing session (type 1). The core decides whether its sim runs;
+    in a testing session (type 1) - or an online race (type 2) when the core's
+    experimental online wear is on. The core decides whether its sim runs;
     every frame still checks the core frame and native terrain identity. */
  char id[100];if(!e||!memchr(e->trackID,0,sizeof(e->trackID)))return 0;memcpy(id,e->trackID,sizeof(id));
- size_t n=strlen(id);if(e->type!=1||!n)return 0;
+ size_t n=strlen(id);if((e->type!=1&&!(e->type==2&&online_wear))||!n)return 0;
  for(size_t k=0;k<n;k++)if((unsigned char)id[k]<32||id[k]=='"'||id[k]=='\\')return 0;
  return 1;
 }
@@ -364,6 +366,7 @@ API int Startup(char *savepath){
  static wchar_t dir[32768];memcpy(dir,path,sizeof(wchar_t)*(n+1));
  wchar_t *slash=wcsrchr(dir,L'\\');if(!slash){SetLastError(error);return -1;}slash[1]=0;if(wcslen(dir)+64>=32768){SetLastError(error);return -1;}
  swprintf(config_path,32768,L"%lsplugins\\mx_dirt_render.ini",dir);
+ {static wchar_t core_ini[32768];swprintf(core_ini,32768,L"%lsplugins\\mx_dirt.ini",dir);online_wear=GetPrivateProfileIntW(L"online",L"online_wear",0,core_ini)==1;}
  content_busy=1;content_ready=mxdirt_content_startup(config_path)==1;content_busy=0;
  if(!content_ready){SetLastError(error);return -1;}
  verified_image=executable_hash(path);

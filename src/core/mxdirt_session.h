@@ -4,6 +4,7 @@
 #include "mxdirt_height_field.h"
 #include "mxdirt_height_publication.h"
 #include "mxb_dirt_ghost.h"
+#include "mxdirt_remote.h"
 
 /* One track session of the CPU dirt simulation, owned by one thread:
    wheel contacts -> work history (soil evolution) + bump stress -> cut gain ->
@@ -85,6 +86,13 @@ int mxdirt_session_set_ghosts(MxdirtSession *,const MxbDirtGhostLap *laps,unsign
 uint64_t mxdirt_session_ghost_passes(const MxdirtSession *);
 /* The real tyre contacts used by the last completed step (t unset), for recording. */
 int mxdirt_session_live_contacts(const MxdirtSession *,MxbDirtGhostSample out[2],int ok[2]);
+/* Online riders (EXPERIMENTAL, mxdirt_remote.h): the other bikes the game reports wear the
+   track as soil of `material`, once their positions are calibrated against the local bike.
+   set: before or between steps. feed: one RaceTrackPosition batch, now_s monotonic seconds. */
+int mxdirt_session_set_remote(MxdirtSession *,int on,int material);
+int mxdirt_session_remote_feed(MxdirtSession *,const MxdRemotePos *,int count,double now_s);
+typedef struct {int calibrated,map,self_num,riders;uint64_t passes,batches,locks;float ref_off,y_off;} MxdirtRemoteState;
+int mxdirt_session_remote_state(const MxdirtSession *,double now_s,MxdirtRemoteState *);
 /* Pre-wear: `riders` virtual riders ride the recorded laps once, synchronously,
    before the first step (spread/clip in metres). Published with the next step. */
 int mxdirt_session_prewear(MxdirtSession *,const MxbDirtGhostLap *laps,unsigned count,unsigned riders,

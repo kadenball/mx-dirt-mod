@@ -30,9 +30,10 @@
    (a,b) covers x in [a,a+1)*soft_cell_m, z in [b,b+1)*soft_cell_m from grid
    vertex (0,0), b with +z. soft_tile[tz*soft_tiles_x+tx] -> soft_tile_side^2
    texels, rows with +z, 2 bytes each {128 + height/soft_unit_um relative to the
-   untouched layer top, bit7 fresh tread | travel angle mod pi in 1/128 of pi};
+   untouched layer top, bit7 crisp tread | bits 6..5 freshness (3 just made .. 0
+   settled) | bits 4..0 travel angle mod pi in 1/32 of pi} (ABI 3);
    a NULL tile is untouched {128,0}. soft_tile_serial[t] changes when tile t does. */
-enum { MXDIRT_FRAME_ABI = 2 };
+enum { MXDIRT_FRAME_ABI = 3 };
 typedef struct {
     uint32_t abi, bytes, owner_thread, reserved;
     uint64_t generation;          /* changes on every track load */

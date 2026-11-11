@@ -40,6 +40,9 @@ struct MxdirtSession {
     unsigned char *prewear_tiles; /* tiles worn by the pre-wear gate, published with the next step */
     MxdSoft *soft;                /* soft top layer, display only (mxdirt_soft_layer.h) */
     int soil_touched;             /* the sim's soil state has something worth saving (ridden, pre-worn or loaded) */
+    /* Online riders (experimental): position tracks -> wheel passes, each rider with its own per-wheel floor memory. */
+    MxdRemote *remote;int remote_material;
+    struct MxdRemoteMem {float last_x[2],last_z[2],last_floor[2];int has_last[2];} *remote_mem;
     /* Per-stage step timing (QPC ticks): contacts+bumps, dirt sim, height conversion. */
     uint64_t timing_frames,timing_ticks[3],timing_max[3];
 };
@@ -108,7 +111,7 @@ static int fresh(const MxdirtSession *s){return owned(s)&&!s->generated_sequence
 void mxdirt_session_destroy(MxdirtSession *s) {
     if(!s||s->in_callback||(s->owner&&s->owner!=GetCurrentThreadId()))return;
     mxdirt_height_field_destroy(s->height);
-    mxb_soil_sim_destroy(s->sim);mxb_soil_destroy(s->soil);free(s->prewear_tiles);mxd_soft_destroy(s->soft);
+    mxb_soil_sim_destroy(s->sim);mxb_soil_destroy(s->soil);free(s->prewear_tiles);mxd_soft_destroy(s->soft);free(s->remote);free(s->remote_mem);
     free(s->seed);free(s->target);free(s->accepted);free(s->changes);
     free(s->pending_begin);free(s->pending_end);free(s);
 }
@@ -346,6 +349,55 @@ static void ghosts_step(MxdirtSession *s,float dt){
         s->ghost[i].clock=target;
     }
 }
+/* Online riders (experimental, mxdirt_remote.h). */
+int mxdirt_session_set_remote(MxdirtSession *s,int on,int material){
+    if(!owned(s)||!s->sim)return 0;
+    if(!on){free(s->remote);free(s->remote_mem);s->remote=NULL;s->remote_mem=NULL;return 1;}
+    if(!s->remote){s->remote=malloc(sizeof(*s->remote));s->remote_mem=calloc(MXD_REMOTE_MAX,sizeof(*s->remote_mem));
+        if(!s->remote||!s->remote_mem){free(s->remote);free(s->remote_mem);s->remote=NULL;s->remote_mem=NULL;return 0;}
+        mxd_remote_reset(s->remote,s->c.contact.origin_metres);}
+    s->remote_material=material;return 1;
+}
+int mxdirt_session_remote_feed(MxdirtSession *s,const MxdRemotePos *in,int count,double now){
+    if(!owned(s)||!s->remote||!in||count<=0)return 0;mxd_remote_feed(s->remote,in,count,now);return 1;
+}
+int mxdirt_session_remote_state(const MxdirtSession *s,double now,MxdirtRemoteState *o){
+    if(!s||!o||!s->remote)return 0;const MxdRemote *m=s->remote;
+    o->calibrated=m->map>=0;o->map=m->map;o->self_num=m->self_num;o->riders=mxd_remote_riders(m,now);
+    o->passes=m->passes;o->batches=m->batches;o->locks=m->locks;o->ref_off=m->ref_off;o->y_off=m->y_off;return 1;
+}
+/* absolute ground height (track shape + deformation), m, any fixed zero */
+static float remote_ground(void *user,float X,float Z){
+    const MxbSoilSim *m=user;return mxb_pw_base(m,X,Z)+mxb_ss_sample_m(m,X,Z);
+}
+/* After the local wheels: tell the tracker where the local bike is (calibration), then let every other
+   bike's passes since the last frame cut at the player's live wear level, each joined to that rider's
+   own previous pass. Share .6: a made-up pass has no bump rows or load swings, so it cuts less than a
+   real one at the player's own .42 - at .6 six Maryland laps ridden as a remote rider remove about the
+   volume the player riding them does (318 m3 at 10 reports/s, 401 at 60, player 367). */
+#define MXDIRT_REMOTE_SHARE .6f
+static void remotes_step(MxdirtSession *s){
+    if(!s->remote||!s->sim)return;MxbSoilSim *m=s->sim;const float nm=m->native_m;
+    if(s->live_ok[0]&&s->live_ok[1]){float X=.5f*(s->live[0].x+s->live[1].x)*nm,Z=.5f*(s->live[0].z+s->live[1].z)*nm;
+        mxd_remote_self(s->remote,X,Z,s->live[1].fwd,1,remote_ground(m,X,Z));}
+    MxdRemotePass pass[MXD_REMOTE_PASSES];int n=mxd_remote_emit(s->remote,pass,MXD_REMOTE_PASSES,m->base?remote_ground:NULL,m);
+    if(n<=0)return;
+    const float d0=m->p.depth_scale,hx=.5f*m->span_x-2.f,hz=.5f*m->span_z-2.f;m->p.depth_scale=d0*MXDIRT_REMOTE_SHARE*mxb_live_wear_depth(&s->wear);
+    for(int i=0;i<n;i++){const MxdRemotePass *p=pass+i;
+        if(p->rider<0||p->rider>=MXD_REMOTE_MAX||!(fabsf(p->X)<hx)||!(fabsf(p->Z)<hz))continue;
+        MxbSoilSimWheel w;memset(&w,0,sizeof(w));const unsigned k=p->wheel?1u:0u;struct MxdRemoteMem *g=s->remote_mem+p->rider;
+        w.x=p->X/nm;w.z=p->Z/nm;w.fwd[0]=p->fwd[0];w.fwd[1]=p->fwd[1];w.lat[0]=p->fwd[1];w.lat[1]=-p->fwd[0];
+        w.speed=p->speed;w.slip_long=p->slip_long;w.load=p->load;w.width=k?.15f:.11f;w.radius=k?.33f:.35f;w.gain=1.f;w.dt=p->dt;w.valid=1;
+        w.material=s->remote_material;w.turn=p->turn;w.brake=p->brake;w.impact=p->impact;w.print_fade=.5f; /* trenches, no crisp knob pits */
+        if(p->restart)g->has_last[k]=0;
+        float lx=m->last_x[k],lz=m->last_z[k],lf=m->last_floor[k];int lh=m->has_last[k];
+        m->last_x[k]=g->last_x[k];m->last_z[k]=g->last_z[k];m->last_floor[k]=g->last_floor[k];m->has_last[k]=g->has_last[k];
+        mxb_soil_sim_wheel(m,k,&w);
+        g->last_x[k]=m->last_x[k];g->last_z[k]=m->last_z[k];g->last_floor[k]=m->last_floor[k];g->has_last[k]=m->has_last[k];
+        m->last_x[k]=lx;m->last_z[k]=lz;m->last_floor[k]=lf;m->has_last[k]=lh;
+    }
+    m->p.depth_scale=d0;
+}
 /* The work-history grid's packed/loose follow the dirt sim's own state where it
    changed: compacted lines read packed, berms/roost/churned soil read loose.
    Soil cell rows run with +z; simulation rows run with -z. */
@@ -500,7 +552,7 @@ int mxdirt_session_step(MxdirtSession *s,const MxdirtControllerFrame frames[2],
             s->sim->last_x[w]=lx;s->sim->last_z[w]=lz;s->sim->last_floor[w]=lf;s->sim->has_last[w]=lh;
         }
     }
-    if(!s->priming){ghosts_step(s,frames[0].dt);mxb_live_gate_advance(&s->gate,frames[0].dt);}
+    if(!s->priming){ghosts_step(s,frames[0].dt);remotes_step(s);mxb_live_gate_advance(&s->gate,frames[0].dt);}
     mxb_soil_sim_end(s->sim);
     if(s->prewear_tiles){size_t tn=(size_t)s->sim->tiles_x*s->sim->tiles_y;for(size_t t=0;t<tn;t++)s->sim->tiles[t]|=s->prewear_tiles[t];free(s->prewear_tiles);s->prewear_tiles=NULL;}
     uint64_t t2=qpc_now();
