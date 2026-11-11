@@ -109,7 +109,8 @@ static const char mxdirt_fragment_shader[]=
     2 cm ring ON THE GROUND (world offsets mapped to pixels through the inverse
     pixel footprint, so grazing views never smear along the view direction) */
  "ivec2 vmax=textureSize(background,0)-1;vec3 blur=native;float bw=1.,det=dpx.x*dpy.y-dpy.x*dpx.y;"
- "if(abs(det)>1e-14){mat2 Ji=mat2(dpy.y,-dpx.y,-dpy.x,dpx.x)/det;"
+ /* perf: the 2 cm ring is under ~1 pixel beyond px 5 cm, and nothing uses it on untouched ground without the soft layer */
+ "if(abs(det)>1e-14&&px<.05&&(worked>.003||soft_on!=0)){mat2 Ji=mat2(dpy.y,-dpx.y,-dpy.x,dpx.x)/det;"
  "for(int i=0;i<6;i++){float a=1.0472*float(i)+.5236;vec2 o=Ji*(vec2(cos(a),sin(a))*.02);float ol=length(o);if(ol>10.)o*=10./ol;"
  "blur+=texelFetch(background,clamp(pix+ivec2(round(o)),ivec2(0),vmax),0).rgb;bw+=1.;}}"
  "vec3 albedo=mix(native,blur/bw,worked*(.12+.28*firm));" /* loose dirt keeps its grit, packed lines smooth out */
@@ -174,9 +175,10 @@ static const char mxdirt_fragment_shader[]=
  /* tyre prints: crisp on intact dirt, gone once the ground is churned loose or
     chopped up; the knob pattern fades by pixel size, the pressed band stays */
  "float pband=0.;"
- "if(state_on!=0){vec2 tc=g-.5;ivec2 tb=ivec2(floor(tc));vec4 T[4];vec2 C[4];"
+ /* perf: the print band is gone by px 9 cm and fully replaced by the soft layer's own prints where s_vis is 1 */
+ "if(state_on!=0&&px<.09&&s_vis<.995){vec2 tc=g-.5;ivec2 tb=ivec2(floor(tc));vec4 T[4];vec2 C[4];"
  "for(int i=0;i<4;i++){ivec2 ti=clamp(tb+ivec2(i&1,i>>1),ivec2(0),ivec2(int(SIDE)-1));T[i]=texelFetch(prints,ti,0);C[i]=p+(vec2(ti)-tc)*spacing;}"
- "float b0,b1,b2,h0=tyre(p,T,C,b0),hx=tyre(p+vec2(.004,0),T,C,b1),hz=tyre(p+vec2(0,.004),T,C,b2);"
+ "float b0,b1,b2,h0=tyre(p,T,C,b0),hx=h0,hz=h0;if(px<.032){hx=tyre(p+vec2(.004,0),T,C,b1);hz=tyre(p+vec2(0,.004),T,C,b2);}" /* knob relief only where it shows */
  "float intact=(1.-smoothstep(.35,.7,s_loose))*(1.-smoothstep(.1,.35,s_clod));" /* damage = churned loose soil / roost, not rut curvature */
  /* own fades: the 12 cm band reads until ~5 cm pixels, the ~5.5 cm knob rows until ~2.5 cm */
  "float pfb=1.-smoothstep(.04,.09,px),pfk=1.-smoothstep(.014,.032,px);"
@@ -201,7 +203,7 @@ static const char mxdirt_fragment_shader[]=
  /* sun shadows from the deformation only: occlusion along the sun ray over
     current heights minus the same test over base heights. 8 taps, ~3.6 cells. */
  "float shade=1.,lh=length(L.xz);"
- "if(lh>.05){vec2 sd=(L.xz/lh)/spacing;float rise=L.y/lh,stp=.45*min(spacing.x,spacing.y),oc=0.,ob=0.;"
+ "if(lh>.05&&worked>.003){vec2 sd=(L.xz/lh)/spacing;" /* perf: untouched ground casts no deformation shadow */ "float rise=L.y/lh,stp=.45*min(spacing.x,spacing.y),oc=0.,ob=0.;"
  "for(int i=1;i<=8;i++){float d=stp*float(i),fall=1.-float(i)/10.;vec2 hs=H(g+sd*d);"
  "oc=max(oc,clamp((hs.r-c0.r-rise*d-.01)/.04,0.,1.)*fall);ob=max(ob,clamp((hs.g-c0.g-rise*d-.01)/.04,0.,1.)*fall);}"
  "shade=1.-.36*max(oc-ob,0.);}"

@@ -428,7 +428,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.4.0   # both + the release zip in build\
+.\package.ps1 -Version 1.4.1   # both + the release zip in build\
 ```
 
 Source layout:

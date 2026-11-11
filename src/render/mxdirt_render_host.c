@@ -273,15 +273,22 @@ static int bind_generation(uint64_t current,HGLRC ctx,DWORD thread){
 }
 /* First native terrain draw inside the outer terrain call: its matrices are the
    camera the ground was drawn with. Any other shape fails this frame. */
+static float proj_cache[16];static int proj_valid;static unsigned proj_age;
 static void observe_gl(uint32_t path,void *ret,GLenum mode,GLsizei count,GLenum type){
  if(GetCurrentThreadId()!=render_thread||!capture.depth||content_busy)return;
  if(!camera_active||capture.depth!=1||capture.scope_count!=1){camera_failed=1;return;}
  if(camera_seen||camera_failed)return;
  if(path>2||mode!=GL_TRIANGLES||count<=0||count%3||(type!=GL_UNSIGNED_SHORT&&type!=GL_UNSIGNED_INT)||
     return_rva(ret)!=draw_returns[path][type!=GL_UNSIGNED_SHORT]||wglGetCurrentContext()!=render_context){camera_failed=1;return;}
- glGetFloatv(GL_MODELVIEW_MATRIX,camera.modelview);glGetFloatv(GL_PROJECTION_MATRIX,camera.projection);
- for(unsigned j=0;j<16;j++)if(!isfinite(camera.modelview[j])||!isfinite(camera.projection[j]))camera_failed=1;
- if(memcmp(camera.modelview,capture.scopes[0].view,64))camera_failed=1; /* GL modelview == the view handed to the terrain call */
+ /* perf: glGet* drains NVIDIA's threaded driver queue mid-terrain. The modelview IS the view handed to the
+    terrain call (verified on every full check); the projection only changes with FOV / resolution. Both
+    are read from GL every 30th frame and after any failed frame, otherwise reused. */
+ if(!proj_valid||++proj_age>=30u){
+  glGetFloatv(GL_MODELVIEW_MATRIX,camera.modelview);glGetFloatv(GL_PROJECTION_MATRIX,proj_cache);proj_valid=1;proj_age=0;
+  if(memcmp(camera.modelview,capture.scopes[0].view,64)){camera_failed=1;proj_valid=0;} /* GL modelview == the view handed to the terrain call */
+ }else memcpy(camera.modelview,capture.scopes[0].view,64);
+ memcpy(camera.projection,proj_cache,64);
+ for(unsigned j=0;j<16;j++)if(!isfinite(camera.modelview[j])||!isfinite(camera.projection[j])){camera_failed=1;proj_valid=0;}
  camera_seen=1;
 }
 static NOINLINE int terrain_wrapper(void *h,void *m,void *v,const float *matrix,uint32_t flags){
@@ -309,6 +316,7 @@ static NOINLINE int terrain_wrapper(void *h,void *m,void *v,const float *matrix,
   int drawn=0;
   if(eligible){content_busy=1;drawn=mxdirt_content_draw(&camera,&capture.scopes[0]);content_busy=0;}
   frames_attempted++;if(drawn>0)frames_drawn++;else if(drawn<0)frames_failed++;else frames_skipped++;
+  if(drawn<=0)proj_valid=0; /* re-read the camera from GL after any frame that did not draw */
  }
  InterlockedIncrement64(&forwarded[0]);InterlockedDecrement(&inflight);settle();SetLastError(error);return result;
 }

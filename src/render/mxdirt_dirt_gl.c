@@ -20,6 +20,9 @@ enum {
  X_SAMPLE_ALPHA_TO_COVERAGE=0x809e,X_SAMPLE_ALPHA_TO_ONE=0x809f,X_FRAMEBUFFER_SRGB=0x8db9,
  X_POLYGON_OFFSET_FACTOR=0x8038,X_POLYGON_OFFSET_UNITS=0x2a00
 };
+#ifndef MXDIRT_STATE_RECHECK
+#define MXDIRT_STATE_RECHECK 30u
+#endif
 #define FN(ret,name,args) ret(APIENTRY *name)args
 enum { GRID_VERTICES=(MXDIRT_CELLS+1)*(MXDIRT_CELLS+1), GRID_INDICES=MXDIRT_CELLS*MXDIRT_CELLS*6 };
 /* Texture units: 0 heights, 1 native colour snapshot, 2 clods, 3 sim state, 4 tyre prints, 5 soft layer. */
@@ -37,6 +40,11 @@ struct MxDirtGl {
  HGLRC context;DWORD thread;uint64_t generation;
  GLuint program,vao,vbo,ibo,heights,background,clods,state,prints,soft,linear,nearest,mipped,wrapped;
  GLint width,height,uniform[U_COUNT];int heights_ready,clods_ready,state_ready,prints_ready,soft_ready;
+ /* perf: the host GL state at the terrain call, queried in full only every MXDIRT_STATE_RECHECK frames (and
+    after any skipped frame). Every glGet* makes NVIDIA's threaded driver drain its queue - right after the
+    terrain's ~1500 draws ~65 queries a frame serialized the game's render thread with the driver. */
+ struct {int valid;unsigned age;float projection[16];GLint draw_fbo,read_fbo,draw_buffer,source_read,viewport[4],vao,buffer,blend[6],depthfunc,polygon[2];
+  GLboolean color[4],write,enabled[8],blend_enabled,srgb;GLfloat offset_factor,offset_units;SavedBindings saved;} cache;
  uint32_t soft_slot[SOFT_SLOTS*SOFT_SLOTS],soft_slot_serial[SOFT_SLOTS*SOFT_SLOTS]; /* tile id+1 (UINT32_MAX = outside the terrain) and serial in each slot */
  FN(void,active_texture,(GLenum));FN(void,use_program,(GLuint));FN(void,bind_sampler,(GLuint,GLuint));FN(void,bind_buffer,(GLenum,GLuint));
  FN(void,get_indexed,(GLenum,GLuint,GLint*));FN(void,program_iv,(GLuint,GLenum,GLint*));
@@ -183,22 +191,32 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   isfinite(soft->cell)&&soft->cell>=.005f&&soft->cell<=.2f&&isfinite(soft->thickness)&&soft->thickness>0.f&&soft->thickness<=.1f&&isfinite(soft->unit)&&soft->unit>=.0001f&&soft->unit<=.005f&&isfinite(soft->origin_x)&&isfinite(soft->origin_z);
  if(look->strength<0||look->strength>2||look->base_loose<0||look->base_loose>1||!(look->fade_start>=0)||!(look->fade_end>look->fade_start)||!(w->spacing_x>0)||!(w->spacing_z>0)||!(w->height_scale>0))return -1;
  for(unsigned k=0;k<16;k++)if(!isfinite(scope->modelview[k])||!isfinite(scope->projection[k]))return 0;
+ if(look->strength<=0)return 1;
+ static const GLenum caps[]={GL_DEPTH_TEST,GL_CULL_FACE,GL_ALPHA_TEST,GL_STENCIL_TEST,GL_COLOR_LOGIC_OP,GL_POLYGON_OFFSET_FILL,X_SAMPLE_ALPHA_TO_COVERAGE,X_SAMPLE_ALPHA_TO_ONE};
+ const int check=!p->cache.valid||++p->cache.age>=MXDIRT_STATE_RECHECK;
+ if(check){p->cache.valid=0;
  /* Still the projection the native terrain was drawn with. */
  float pr[16];glGetFloatv(GL_PROJECTION_MATRIX,pr);if(memcmp(pr,scope->projection,sizeof(pr)))return 0;
- if(look->strength<=0)return 1;
  GLboolean feedback=0;glGetBooleanv(X_TRANSFORM_FEEDBACK_ACTIVE,&feedback);if(feedback||glIsEnabled(X_RASTERIZER_DISCARD))return 0;
  /* No open occlusion/primitive/timer query would count our draw. */
  const GLenum targets[]={0x8914,0x8c2f,0x8c87,0x8c88,0x88bf};for(unsigned k=0;k<5;k++){GLint active=0;p->query(targets[k],X_QUERY_ACTIVE,&active);if(active)return 0;}
  GLint draw_fbo=0,read_fbo=0,draw_buffer=0,samples=0,viewport[4],limit=0;
  glGetIntegerv(X_DRAW_FRAMEBUFFER_BINDING,&draw_fbo);glGetIntegerv(X_READ_FRAMEBUFFER_BINDING,&read_fbo);glGetIntegerv(X_DRAW_BUFFER0,&draw_buffer);glGetIntegerv(X_SAMPLES,&samples);glGetIntegerv(GL_VIEWPORT,viewport);glGetIntegerv(GL_MAX_TEXTURE_SIZE,&limit);
  if(draw_buffer==GL_NONE||(draw_fbo&&samples)||viewport[0]<0||viewport[1]<0||viewport[2]<1||viewport[3]<1||viewport[2]>limit||viewport[3]>limit||(uint64_t)viewport[2]*viewport[3]>16777216)return 0;
- SavedBindings saved;save_bindings(p,&saved);
- GLint vao=0,buffer=0,blend[6],depthfunc=0,polygon[2];GLboolean color[4],write,enabled[8],blend_enabled=p->is_indexed(GL_BLEND,0);
- glGetIntegerv(X_VERTEX_ARRAY_BINDING,&vao);glGetIntegerv(X_ARRAY_BUFFER_BINDING,&buffer);
- const GLenum factors[]={X_BLEND_SRC_RGB,X_BLEND_DST_RGB,X_BLEND_SRC_ALPHA,X_BLEND_DST_ALPHA,X_BLEND_EQUATION_RGB,X_BLEND_EQUATION_ALPHA};for(unsigned k=0;k<6;k++)p->get_indexed(factors[k],0,blend+k);
- p->boolean_indexed(GL_COLOR_WRITEMASK,0,color);glGetBooleanv(GL_DEPTH_WRITEMASK,&write);glGetIntegerv(GL_DEPTH_FUNC,&depthfunc);glGetIntegerv(GL_POLYGON_MODE,polygon);
- const GLenum caps[]={GL_DEPTH_TEST,GL_CULL_FACE,GL_ALPHA_TEST,GL_STENCIL_TEST,GL_COLOR_LOGIC_OP,GL_POLYGON_OFFSET_FILL,X_SAMPLE_ALPHA_TO_COVERAGE,X_SAMPLE_ALPHA_TO_ONE};for(unsigned k=0;k<8;k++)enabled[k]=glIsEnabled(caps[k]);
- GLboolean srgb=glIsEnabled(X_FRAMEBUFFER_SRGB);GLfloat offset_factor=0,offset_units=0;glGetFloatv(X_POLYGON_OFFSET_FACTOR,&offset_factor);glGetFloatv(X_POLYGON_OFFSET_UNITS,&offset_units);
+ save_bindings(p,&p->cache.saved);
+ p->cache.blend_enabled=p->is_indexed(GL_BLEND,0);
+ glGetIntegerv(X_VERTEX_ARRAY_BINDING,&p->cache.vao);glGetIntegerv(X_ARRAY_BUFFER_BINDING,&p->cache.buffer);
+ const GLenum factors[]={X_BLEND_SRC_RGB,X_BLEND_DST_RGB,X_BLEND_SRC_ALPHA,X_BLEND_DST_ALPHA,X_BLEND_EQUATION_RGB,X_BLEND_EQUATION_ALPHA};for(unsigned k=0;k<6;k++)p->get_indexed(factors[k],0,p->cache.blend+k);
+ p->boolean_indexed(GL_COLOR_WRITEMASK,0,p->cache.color);glGetBooleanv(GL_DEPTH_WRITEMASK,&p->cache.write);glGetIntegerv(GL_DEPTH_FUNC,&p->cache.depthfunc);glGetIntegerv(GL_POLYGON_MODE,p->cache.polygon);
+ for(unsigned k=0;k<8;k++)p->cache.enabled[k]=glIsEnabled(caps[k]);
+ p->cache.srgb=glIsEnabled(X_FRAMEBUFFER_SRGB);glGetFloatv(X_POLYGON_OFFSET_FACTOR,&p->cache.offset_factor);glGetFloatv(X_POLYGON_OFFSET_UNITS,&p->cache.offset_units);
+ {GLint prev=0;p->bind_framebuffer(X_READ_FRAMEBUFFER,(GLuint)draw_fbo);glGetIntegerv(GL_READ_BUFFER,&prev);p->bind_framebuffer(X_READ_FRAMEBUFFER,(GLuint)read_fbo);p->cache.source_read=prev;}
+ memcpy(p->cache.projection,pr,sizeof(pr));p->cache.draw_fbo=draw_fbo;p->cache.read_fbo=read_fbo;p->cache.draw_buffer=draw_buffer;memcpy(p->cache.viewport,viewport,sizeof(viewport));
+ p->cache.age=0;p->cache.valid=1;}
+ else if(memcmp(p->cache.projection,scope->projection,sizeof(p->cache.projection))){p->cache.valid=0;return 0;} /* the host's camera changed: re-query next frame */
+ const GLint draw_fbo=p->cache.draw_fbo,read_fbo=p->cache.read_fbo,draw_buffer=p->cache.draw_buffer,*viewport=p->cache.viewport,vao=p->cache.vao,buffer=p->cache.buffer,*blend=p->cache.blend,depthfunc=p->cache.depthfunc,*polygon=p->cache.polygon;
+ const GLboolean *color=p->cache.color,write=p->cache.write,*enabled=p->cache.enabled,blend_enabled=p->cache.blend_enabled,srgb=p->cache.srgb;const GLfloat offset_factor=p->cache.offset_factor,offset_units=p->cache.offset_units;
+ const SavedBindings *saved=&p->cache.saved;
  const GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->prints,p->soft},samplers[UNITS]={p->linear,p->nearest,p->mipped,p->linear,p->nearest,p->wrapped};
  int result=-1;apply_bindings(p,textures,samplers);
  p->active_texture(X_TEXTURE0+2);
@@ -228,7 +246,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  }
  /* Snapshot the native colour of this viewport from the actual DRAW target,
     then restore both the source FBO's read selector and the read binding. */
- p->bind_framebuffer(X_READ_FRAMEBUFFER,(GLuint)draw_fbo);GLint source_read=0;glGetIntegerv(GL_READ_BUFFER,&source_read);
+ p->bind_framebuffer(X_READ_FRAMEBUFFER,(GLuint)draw_fbo);const GLint source_read=p->cache.source_read;
  glReadBuffer(draw_buffer==GL_FRONT_AND_BACK?GL_FRONT:(GLenum)draw_buffer);
  glCopyTexSubImage2D(GL_TEXTURE_2D,0,0,0,viewport[0],viewport[1],viewport[2],viewport[3]);
  glReadBuffer((GLenum)source_read);p->bind_framebuffer(X_READ_FRAMEBUFFER,(GLuint)read_fbo);
@@ -250,5 +268,6 @@ restore:
  if(blend_enabled)p->enable_indexed(GL_BLEND,0);else p->disable_indexed(GL_BLEND,0);p->blend(0,(GLenum)blend[0],(GLenum)blend[1],(GLenum)blend[2],(GLenum)blend[3]);p->equation(0,(GLenum)blend[4],(GLenum)blend[5]);p->color(0,color[0],color[1],color[2],color[3]);
  for(unsigned k=0;k<8;k++)toggle(caps[k],enabled[k]);toggle(X_FRAMEBUFFER_SRGB,srgb);glPolygonOffset(offset_factor,offset_units);glDepthFunc((GLenum)depthfunc);glDepthMask(write);
  glPolygonMode(GL_FRONT,(GLenum)polygon[0]);glPolygonMode(GL_BACK,(GLenum)polygon[1]);p->bind_vao((GLuint)vao);p->bind_buffer(X_ARRAY_BUFFER,(GLuint)buffer);
- restore_bindings(p,&saved);return result;
+ restore_bindings(p,saved);if(result!=1)p->cache.valid=0; /* anything odd: full queries next frame */
+ return result;
 }
