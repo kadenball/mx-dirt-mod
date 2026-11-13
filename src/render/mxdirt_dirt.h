@@ -27,7 +27,8 @@
 #define MXDIRT_MARGIN 4
 #endif
 #define MXDIRT_SIDE (MXDIRT_CELLS+1+2*MXDIRT_MARGIN)
-enum { MXDIRT_RECENTER=16, MXDIRT_NEAR=64, MXDIRT_SLICES=8, MXDIRT_STATE_SLICES=16, MXDIRT_RECTS=24 };
+/* RECENTER: on a track with 10 cm cells (supercross) 16 cells recentred the window ~7 times a second. */
+enum { MXDIRT_RECENTER=48, MXDIRT_NEAR=64, MXDIRT_SLICES=8, MXDIRT_STATE_SLICES=16, MXDIRT_RECTS=24 };
 /* Storage texels that changed and are not uploaded yet. n > MXDIRT_RECTS: everything. The uploader sets n=0. */
 typedef struct {uint16_t x,y,w,h;} MxDirtRect;
 typedef struct {uint32_t n;MxDirtRect r[MXDIRT_RECTS];} MxDirtDirty;
@@ -55,6 +56,7 @@ typedef struct {
 } MxDirtWindow;
 enum { MXDIRT_OK=0,MXDIRT_INPUT,MXDIRT_CAMERA,MXDIRT_READ };
 typedef struct {uint32_t stage,read_calls,read_bytes,recentered,changed;} MxDirtStats;
+/* The window's reach ahead of the camera shrinks by up to RECENTER cells between recentres. */
 typedef struct MxDirt MxDirt;
 MxDirt *mxdirt_create(void);
 void mxdirt_destroy(MxDirt *);

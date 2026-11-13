@@ -493,6 +493,32 @@ int mxdirt_session_set_bumps(MxdirtSession *s,float percent){
     if(!fresh(s)||!isfinite(percent)||percent<0.f||percent>200.f)return 0;
     s->bump_gain=.30f*percent/100.f;memset(s->bump,0,sizeof(s->bump));return 1;
 }
+static int live_ok(float v,float lo,float hi){return v<0.f||(isfinite(v)&&v>=lo&&v<=hi);}
+int mxdirt_session_live_settings(MxdirtSession *s,const MxdirtLiveSettings *v){
+    if(!owned(s)||!s->sim||!v)return 0;
+    if(!live_ok(v->depth_percent,10.f,300.f)||!live_ok(v->firmness_percent,0.f,100.f)||!live_ok(v->moisture_percent,0.f,100.f)||
+       !live_ok(v->bumps_percent,0.f,200.f)||!live_ok(v->rolling_bumps_percent,0.f,100.f)||!live_ok(v->hardness_percent,25.f,200.f)||
+       !live_ok(v->breakdown_percent,0.f,300.f)||!live_ok(v->drying_percent,0.f,400.f)||!live_ok(v->sweep_percent,0.f,300.f)||
+       !live_ok(v->capture_percent,0.f,300.f)||!live_ok(v->cohesion_percent,0.f,300.f)||!live_ok(v->clods_percent,0.f,300.f))return 0;
+    MxbSoilSimParams *p=&s->sim->p;
+    if(v->depth_percent>=0.f){ /* as mxdirt_session_start_sim */
+        p->hardpan=.20f*sqrtf(fmaxf(.5f,fminf(2.5f,v->depth_percent/50.f)));
+        s->bias_floor_m=.04f*fmaxf(.3f,fminf(2.5f,v->depth_percent/50.f));p->depth_scale=v->depth_percent/100.f;}
+    if(v->firmness_percent>=0.f)p->compaction0=.12f+.35f*v->firmness_percent/100.f;
+    if(v->moisture_percent>=0.f)p->moisture=v->moisture_percent/100.f;
+    if(v->bumps_percent>=0.f){const float g=.30f*v->bumps_percent/100.f;
+        if(!(s->bump_gain>0.f)&&g>0.f)memset(s->bump,0,sizeof(s->bump)); /* switched on: no stale wheel history */
+        s->bump_gain=g;}
+    if(v->rolling_bumps_percent>=0.f)s->rolling_bumps=fmaxf(.1f,v->rolling_bumps_percent/100.f);
+    if(v->hardness_percent>=0.f)p->k_packed=p->k_loose*powf(2.0e7f/2.3e4f,v->hardness_percent/100.f);
+    if(v->breakdown_percent>=0.f)p->breakdown=v->breakdown_percent/100.f;
+    if(v->drying_percent>=0.f)p->drying=v->drying_percent/100.f;
+    if(v->sweep_percent>=0.f)p->sweep=v->sweep_percent/100.f;
+    if(v->capture_percent>=0.f)p->capture=v->capture_percent/100.f;
+    if(v->cohesion_percent>=0.f)p->cohesion=v->cohesion_percent/100.f;
+    if(v->clods_percent>=0.f)p->clods=v->clods_percent/100.f;
+    return 1;
+}
 int mxdirt_session_set_rolling_bumps(MxdirtSession *s,float percent){
     if(!fresh(s)||!isfinite(percent)||percent<0.f||percent>100.f)return 0;
     s->rolling_bumps=fmaxf(.1f,percent/100.f);return 1;

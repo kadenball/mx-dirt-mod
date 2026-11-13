@@ -82,7 +82,7 @@ static RaGeometry ra_geom;static int ra_geom_valid;
 static unsigned ra_dirt_sim_depth=60,ra_dirt_sim_firmness=55,ra_dirt_sim_moisture=35;
 static unsigned ra_bumps_percent=100,ra_rolling_bumps_percent=60;
 static unsigned ra_hardness_percent=100,ra_breakdown_percent=100,ra_drying_percent=100,ra_sweep_percent=100;
-static unsigned ra_extra_riders=0,ra_live_gate=1,ra_live_wear=100;
+static unsigned ra_extra_riders=0,ra_live_gate=1,ra_live_wear=0;
 /* Online wear (EXPERIMENTAL, [online] online_wear=1): active in online race events too, and the other riders wear the track
    (mxdirt_remote.h). ra_online: this event is a race. No pre-wear, ghosts, lap recording or saved soil / marks there. */
 static unsigned ra_online_wear=0,ra_online_echo=0;static int ra_online;
@@ -597,7 +597,9 @@ static int ra_wheel(void *bike,int wheel,float dt) {
  }
  InterlockedDecrement(&ra_inflight);_mm_setcsr(outgoing_csr);SetLastError(outgoing);return result;
 }
+static void ra_settings_live(void);
 static void ra_complete_frame(int elapsed) {
+ {static unsigned poll;if(!(++poll&63u))ra_settings_live();} /* about twice a second: one file-time query */
  MxbFrameSnapshot f;MxbFrameGate g=ra_gate();int result=mxb_frame_snapshot_finish(&ra_snapshot,&g,&f);
  if(result!=MXB_FRAME_OK&&result!=MXB_FRAME_NO_NEW_STEP){if(result!=MXB_FRAME_WAITING)ra_reject(result);return;}
  if(!ra_has_geometry[0]||!ra_has_geometry[1]){ra_mark(RA_FRAME,MXB_FRAME_WAITING);return;}
@@ -894,9 +896,73 @@ API int MxDirtBorrowFrame(uint32_t abi,uint32_t bytes,MxDirtFrame *out){
  *out=f;ok=1;
 end:SetLastError(previous);return ok;
 }
-/* [section] key as an unsigned int with an upper bound; -1 = invalid. */
-static int ra_ini_uint(const char *section,const char *key,unsigned def,unsigned lo,unsigned hi,unsigned *out){
- UINT v=GetPrivateProfileIntA(section,key,(INT)def,ra_ini);if(v<lo||v>hi)return 0;*out=v;return 1;
+/* Settings (mx_dirt.ini): [section] key, default, range, where it lives. Read at Startup, and again whenever
+   the file changes while the game runs (the launcher, live): see ra_settings_live. */
+typedef struct {const char *section,*key;unsigned def,lo,hi,*value;} RaSetting;
+static const RaSetting ra_settings[]={
+ {"soil","dirt_sim_depth_percent",60,10,300,&ra_dirt_sim_depth},{"soil","dirt_sim_firmness_percent",55,0,100,&ra_dirt_sim_firmness},
+ {"soil","dirt_sim_moisture_percent",35,0,100,&ra_dirt_sim_moisture},{"soil","braking_bumps_percent",100,0,200,&ra_bumps_percent},
+ {"soil","rolling_bumps_percent",60,0,100,&ra_rolling_bumps_percent},{"soil","packed_hardness_percent",100,25,200,&ra_hardness_percent},
+ {"soil","breakdown_percent",100,0,300,&ra_breakdown_percent},{"soil","drying_percent",100,0,400,&ra_drying_percent},
+ {"soil","sweep_percent",100,0,300,&ra_sweep_percent},{"soil","sharp_ruts",0,0,1,&ra_sharp_ruts},
+ {"soil","rut_capture_percent",100,0,300,&ra_capture_percent},{"soil","wall_cohesion_percent",100,0,300,&ra_cohesion_percent},
+ {"soil","roost_clods_percent",100,0,300,&ra_clods_percent},{"soil","prewear_riders",50,0,400,&ra_prewear_riders},
+ {"soil","prewear_spread_cm",140,0,500,&ra_prewear_spread_cm},{"soil","prewear_clip_cm",400,0,600,&ra_prewear_clip_cm},
+ {"soil","prewear_fresh_only",1,0,1,&ra_prewear_fresh_only},{"soil","soft_layer_mm",85,0,100,&ra_soft_mm},
+ {"soil","extra_riders",0,0,15,&ra_extra_riders},{"soil","ghost_riders",0,0,MXDIRT_SESSION_MAX_GHOSTS,&ra_ghost_riders},
+ {"soil","record_ghosts",1,0,1,&ra_record_ghosts},{"soil","follow_game_deformation",1,0,1,&ra_follow_game_deformation},
+ {"soil","game_deformation_reference_percent",25,1,200,&ra_game_deformation_reference},{"soil","live_wear_percent",0,0,200,&ra_live_wear},
+ {"online","online_wear",0,0,1,&ra_online_wear},{"debug","online_echo",0,0,1,&ra_online_echo},{"debug","dump_terrain",0,0,1,&ra_dump_terrain},
+};
+enum { RA_SETTINGS=sizeof(ra_settings)/sizeof(*ra_settings) };
+/* All settings from the file into the variables, or nothing (0) if any value is out of range. */
+static int ra_settings_load(void){
+ unsigned v[RA_SETTINGS];
+ for(unsigned k=0;k<RA_SETTINGS;k++){const RaSetting *q=ra_settings+k;UINT x=GetPrivateProfileIntA(q->section,q->key,(INT)q->def,ra_ini);if(x<q->lo||x>q->hi)return 0;v[k]=x;}
+ for(unsigned k=0;k<RA_SETTINGS;k++)*ra_settings[k].value=v[k];
+ ra_live_gate=GetPrivateProfileIntA("soil","live_gate_lines",1,ra_ini);if(ra_live_gate<1||ra_live_gate>8)ra_live_gate=1;
+ return 1;
+}
+/* 1 once per change of the settings file, a quarter of a second after it was last written (never mid-save). */
+static FILETIME ra_ini_time;
+static int ra_ini_changed(void){
+ WIN32_FILE_ATTRIBUTE_DATA a;if(!GetFileAttributesExA(ra_ini,GetFileExInfoStandard,&a)||!CompareFileTime(&a.ftLastWriteTime,&ra_ini_time))return 0;
+ FILETIME now;GetSystemTimeAsFileTime(&now);
+ const uint64_t n=((uint64_t)now.dwHighDateTime<<32)|now.dwLowDateTime,w=((uint64_t)a.ftLastWriteTime.dwHighDateTime<<32)|a.ftLastWriteTime.dwLowDateTime;
+ if(n>=w&&n-w<2500000u)return 0;
+ ra_ini_time=a.ftLastWriteTime;return 1;
+}
+/* Live settings. Owner thread, between frames. A changed file is read again; a file with a value out of
+   range changes nothing. Soil tuning, bumps, wear speed and lines reach the running session at once (not in
+   an online race, where every player must run the same values); pre-wear, the soft layer's depth, sharp ruts,
+   ghost riders and online wear are used when the next track loads. */
+static void ra_settings_live(void){
+ if(!ra_ini_changed())return;
+ const unsigned depth=ra_dirt_sim_depth,firm=ra_dirt_sim_firmness,moist=ra_dirt_sim_moisture,bumps=ra_bumps_percent,rolling=ra_rolling_bumps_percent,
+  hard=ra_hardness_percent,breakdown=ra_breakdown_percent,drying=ra_drying_percent,sweep=ra_sweep_percent,capture=ra_capture_percent,
+  cohesion=ra_cohesion_percent,clods=ra_clods_percent,gate=ra_live_gate,wear=ra_live_wear;
+ const int ok=ra_settings_load();int applied=0;
+ if(ok&&ra_session&&!ra_online){
+  MxdirtLiveSettings t;float *f=(float*)&t;for(unsigned k=0;k<sizeof(t)/sizeof(float);k++)f[k]=-1.f;
+  if(depth!=ra_dirt_sim_depth){float d=(float)ra_dirt_sim_depth; /* x this session's Deformation slider factor, as ra_game_depth */
+   if(!ra_game_deform_off&&ra_game_factor>0.f){d*=ra_game_factor;if(d<10.f)d=10.f;if(d>300.f)d=300.f;}t.depth_percent=d;}
+  if(firm!=ra_dirt_sim_firmness)t.firmness_percent=(float)ra_dirt_sim_firmness;
+  if(moist!=ra_dirt_sim_moisture)t.moisture_percent=(float)ra_dirt_sim_moisture;
+  if(bumps!=ra_bumps_percent)t.bumps_percent=(float)ra_bumps_percent;
+  if(rolling!=ra_rolling_bumps_percent)t.rolling_bumps_percent=(float)ra_rolling_bumps_percent;
+  if(hard!=ra_hardness_percent)t.hardness_percent=(float)ra_hardness_percent;
+  if(breakdown!=ra_breakdown_percent)t.breakdown_percent=(float)ra_breakdown_percent;
+  if(drying!=ra_drying_percent)t.drying_percent=(float)ra_drying_percent;
+  if(sweep!=ra_sweep_percent)t.sweep_percent=(float)ra_sweep_percent;
+  if(capture!=ra_capture_percent)t.capture_percent=(float)ra_capture_percent;
+  if(cohesion!=ra_cohesion_percent)t.cohesion_percent=(float)ra_cohesion_percent;
+  if(clods!=ra_clods_percent)t.clods_percent=(float)ra_clods_percent;
+  applied=mxdirt_session_live_settings(ra_session,&t);
+  if(gate!=ra_live_gate)applied=mxdirt_session_set_live_gate(ra_session,ra_live_gate)&&applied;
+  if(wear!=ra_live_wear)applied=mxdirt_session_set_live_wear(ra_session,(float)ra_live_wear)&&applied;
+ }
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"live_settings\",\"read\":%d,\"session\":%d,\"applied_now\":%d,\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"live_wear_percent\":%u,\"live_gate_lines\":%u,\"prewear_riders\":%u,\"soft_layer_mm\":%u}\n",
+  ok,ra_session?1:0,applied,ra_dirt_sim_depth,ra_dirt_sim_firmness,ra_dirt_sim_moisture,ra_bumps_percent,ra_rolling_bumps_percent,ra_live_wear,ra_live_gate,ra_prewear_riders,ra_soft_mm);fflush(ra_log);}
 }
 API int Startup(char *savepath) {
  (void)savepath;ra_owner=GetCurrentThreadId();ra_image=(unsigned char *)GetModuleHandleW(NULL);
@@ -911,36 +977,7 @@ API int Startup(char *savepath) {
     snprintf(logpath,sizeof(logpath),"%splugins\\mx_dirt.jsonl",path)>=(int)sizeof(logpath))return -1;
  ra_enabled=GetPrivateProfileIntA("active","enabled",1,ra_ini)==1;
  if(!ra_enabled)return -1;
- unsigned dump=0;
- if(!ra_ini_uint("soil","dirt_sim_depth_percent",60,10,300,&ra_dirt_sim_depth)||
-    !ra_ini_uint("soil","dirt_sim_firmness_percent",55,0,100,&ra_dirt_sim_firmness)||
-    !ra_ini_uint("soil","dirt_sim_moisture_percent",35,0,100,&ra_dirt_sim_moisture)||
-    !ra_ini_uint("soil","braking_bumps_percent",100,0,200,&ra_bumps_percent)||
-    !ra_ini_uint("soil","rolling_bumps_percent",60,0,100,&ra_rolling_bumps_percent)||
-    !ra_ini_uint("soil","packed_hardness_percent",100,25,200,&ra_hardness_percent)||
-    !ra_ini_uint("soil","breakdown_percent",100,0,300,&ra_breakdown_percent)||
-    !ra_ini_uint("soil","drying_percent",100,0,400,&ra_drying_percent)||
-    !ra_ini_uint("soil","sweep_percent",100,0,300,&ra_sweep_percent)||
-    !ra_ini_uint("soil","sharp_ruts",0,0,1,&ra_sharp_ruts)||
-    !ra_ini_uint("soil","rut_capture_percent",100,0,300,&ra_capture_percent)||
-    !ra_ini_uint("soil","wall_cohesion_percent",100,0,300,&ra_cohesion_percent)||
-    !ra_ini_uint("soil","roost_clods_percent",100,0,300,&ra_clods_percent)||
-    !ra_ini_uint("soil","prewear_riders",50,0,400,&ra_prewear_riders)||
-    !ra_ini_uint("soil","prewear_spread_cm",140,0,500,&ra_prewear_spread_cm)||
-    !ra_ini_uint("soil","prewear_clip_cm",400,0,600,&ra_prewear_clip_cm)||
-    !ra_ini_uint("soil","prewear_fresh_only",1,0,1,&ra_prewear_fresh_only)||
-    !ra_ini_uint("soil","soft_layer_mm",85,0,100,&ra_soft_mm)||
-    !ra_ini_uint("soil","extra_riders",0,0,15,&ra_extra_riders)||
-    !ra_ini_uint("soil","ghost_riders",0,0,MXDIRT_SESSION_MAX_GHOSTS,&ra_ghost_riders)||
-    !ra_ini_uint("soil","record_ghosts",1,0,1,&ra_record_ghosts)||
-    !ra_ini_uint("soil","follow_game_deformation",1,0,1,&ra_follow_game_deformation)||
-    !ra_ini_uint("soil","game_deformation_reference_percent",25,1,200,&ra_game_deformation_reference)||
-    !ra_ini_uint("soil","live_wear_percent",100,0,200,&ra_live_wear)||
-    !ra_ini_uint("online","online_wear",0,0,1,&ra_online_wear)||
-    !ra_ini_uint("debug","online_echo",0,0,1,&ra_online_echo)||
-    !ra_ini_uint("debug","dump_terrain",0,0,1,&dump))return -1;
- ra_dump_terrain=dump;
- ra_live_gate=GetPrivateProfileIntA("soil","live_gate_lines",1,ra_ini);if(ra_live_gate<1||ra_live_gate>8)ra_live_gate=1;
+ if(!ra_settings_load())return -1;ra_ini_changed(); /* remembers the file time: later changes are picked up live */
  GetPrivateProfileStringA("soil","sand_tracks","",ra_sand_tracks,sizeof(ra_sand_tracks),ra_ini);
  HMODULE pinned;if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,(LPCSTR)(uintptr_t)ra_outer,&pinned))return -1;ra_pinned=1;
  ra_log=fopen(logpath,"w");if(!ra_log)return -1;
@@ -958,6 +995,7 @@ API void EventInit(void *data,int size) {
  if(GetCurrentThreadId()!=ra_owner)InterlockedExchange(&ra_foreign,1);
  InterlockedExchange(&ra_allowed,0);InterlockedExchange(&ra_running,0);InterlockedIncrement(&ra_reset_token);
  if(!ra_enabled||GetCurrentThreadId()!=ra_owner||ra_inflight)return;
+ ra_settings_live(); /* settings saved since the last track: this one loads with them */
  if(!ra_bootstrap_remove()){ra_fault(-129);return;}
  /* Retirement proof is supplied separately; never reinterpret pause as it. */
  if(ra_transport||ra_hooks[0].owned||ra_hooks[1].owned||ra_hooks[2].owned||ra_hooks[3].owned){ra_fault(-126);ra_mark(RA_RETAINED,3);return;}

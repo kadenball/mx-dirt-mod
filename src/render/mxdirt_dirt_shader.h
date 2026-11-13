@@ -16,6 +16,13 @@
    - sun shadows cast by the deformation only (native hills keep the game's
      own shadows), knob bars and drag streaks along each rut's travel axis, a
      faint sheen on hard-pack and wet rut bottoms,
+   - depth shading (`relief`): ground the riding dug below the original surface
+     gets darker with its depth (rut floors, braking-bump troughs, the groove of
+     a berm) and ground it raised gets lighter with its height (lips, bump
+     crests, the top of a berm). It does not use the sun, so the shapes read in
+     flat light too, and it is a tone, not fine detail, so it still reads where
+     a rut is a few pixels wide. Ground at its original height is not touched:
+     nothing beside a rut goes dark,
    - worked ground is resurfaced: the native texture's own gravel grain is
      averaged over ~2 cm of ground and replaced by soft clods and crumbs that
      fade with pixel size instead of sparkling.
@@ -35,10 +42,15 @@
 #define MXDIRT_SOFT_FADE_AREA 1
 #endif
 #ifndef MXDIRT_SOFT_FADE_START
-#define MXDIRT_SOFT_FADE_START 2.2
+#define MXDIRT_SOFT_FADE_START 3.
 #endif
 #ifndef MXDIRT_SOFT_FADE_END
-#define MXDIRT_SOFT_FADE_END 8.
+#define MXDIRT_SOFT_FADE_END 14.
+#endif
+/* 1: the fine detail (clods, crumbs, knob prints) fades by the pixel's ground area and over a wider range;
+   0: by its longest side, the ranges of 1.6 (comparison builds only). */
+#ifndef MXDIRT_DETAIL_AREA
+#define MXDIRT_DETAIL_AREA 1
 #endif
 #ifndef MXDIRT_EDGE_FADE
 #define MXDIRT_EDGE_FADE 8.
@@ -57,7 +69,7 @@ static const char mxdirt_fragment_version[]="#version 330 compatibility\n";
 static const char mxdirt_fragment_sink[]="#define SINK 1\n";
 static const char mxdirt_fragment_body[]=
  "uniform sampler2D heights,background,clods;uniform ivec2 viewport_origin;uniform mat4 view,projection;uniform vec3 texel0;"
- "uniform vec2 spacing,fade,shift;uniform vec4 bounds;uniform vec3 camera;uniform float height_scale,strength,base_grain;"
+ "uniform vec2 spacing,fade,shift;uniform vec4 bounds;uniform vec3 camera;uniform float height_scale,strength,base_grain,relief;"
  "uniform sampler2D state;uniform int state_on;"
  "uniform sampler2D soft;uniform int soft_on,soft_mode;uniform vec2 soft_origin;uniform vec4 soft_window;uniform float soft_cell,soft_depth,soft_unit;"
  /* perf: one texel per soft tile slot (64x64, wraps like the window): 0 = no soft texel within one tile
@@ -78,7 +90,12 @@ static const char mxdirt_fragment_body[]=
  "return vec3(uvec3(h,h>>11,h>>22)&uvec3(2047u,2047u,1023u))/vec3(2047.,2047.,1023.);}"
  "void main(){vec2 g=gv;vec3 w=wv;"
  /* metres of ground per pixel: every procedural layer fades out before it aliases */
- "vec2 p=w.xz,dpx=dFdx(p),dpy=dFdy(p);float px=max(length(dpx),length(dpy));"
+ /* px: the longest side of the ground a pixel covers; pa: the square root of its area. Wear runs along the
+    riding line, so at riding distance a pixel is long ALONG the line and narrow ACROSS it: detail that
+    fades by px vanishes a few metres ahead (2-4 m at a 124 degree field of view), by pa it carries on
+    while it can still be told apart across the line. The clod texture is mip-mapped, so it softens instead
+    of sparkling as it shrinks. */
+ "vec2 p=w.xz,dpx=dFdx(p),dpy=dFdy(p);float px=max(length(dpx),length(dpy)),pa=sqrt(abs(dpx.x*dpy.y-dpx.y*dpy.x));"
  "float dist=distance(w,camera);"
  "float edge=min(min(w.x-bounds.x,bounds.z-w.x),min(w.z-bounds.y,bounds.w-w.z));"
  "float amount=(1.-smoothstep(fade.x,fade.y,dist))*smoothstep(0.," MXDIRT_STR(MXDIRT_EDGE_FADE) ",edge)*strength;"
@@ -104,7 +121,7 @@ static const char mxdirt_fragment_body[]=
     6-13 m ahead of a chase camera - close enough to watch it appear. */
  "s_vis=smoothstep(.5,3.,se)*(1.-smoothstep(soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_START) ",soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_END) ","
 #if MXDIRT_SOFT_FADE_AREA
-  "sqrt(abs(dpx.x*dpy.y-dpx.y*dpy.x))"
+  "pa"
 #else
   "px"
 #endif
@@ -142,6 +159,10 @@ static const char mxdirt_fragment_body[]=
  "float dd=c0.r-c0.g,hollow=(ring.r-ring.g)-dd;"
  "float dlap=(xp.r-xp.g)+(xm.r-xm.g)+(zp.r-zp.g)+(zm.r-zm.g)-4.*dd;"
  "float raised=smoothstep(.004,.04,dd),dug=smoothstep(.004,.05,-dd),rough=smoothstep(.012,.06,abs(dlap));"
+ /* depth shading: the deformation at this pixel - exact up close, the mean of the ~5 cells already read
+    where a pixel covers more than a cell (a thin rut far away stays a steady darker line, no sparkle) */
+ "float dz=mix(dd,(2.*dd+(xp.r-xp.g)+(xm.r-xm.g)+(zp.r-zp.g)+(zm.r-zm.g)+2.*(ring.r-ring.g))*.125,smoothstep(.5,2.,px/min(spacing.x,spacing.y)));"
+ "float r_dark=pow(clamp((-dz-.008)/.10,0.,1.),.6),r_light=pow(clamp((dz-.010)/.14,0.,1.),.7);"
  /* soil state: the dirt sim's own per-texel state, else height-only defaults */
  "float s_pack=0.,s_loose=0.,wet=.35,s_clod=0.;"
  "if(state_on!=0){vec4 q=texture(state,(g+shift)/SIDE);s_pack=q.r;s_loose=q.g;wet=q.b;s_clod=q.a;}"
@@ -161,13 +182,20 @@ static const char mxdirt_fragment_body[]=
     2 cm ring ON THE GROUND (world offsets mapped to pixels through the inverse
     pixel footprint, so grazing views never smear along the view direction) */
  "ivec2 vmax=textureSize(background,0)-1;vec3 blur=native;float bw=1.,det=dpx.x*dpy.y-dpy.x*dpx.y;"
- /* perf: the 2 cm ring is under ~1 pixel beyond px 5 cm, and nothing uses it on untouched ground without the soft layer */
- "if(abs(det)>1e-14&&px<.05&&(worked>.003||soft_on!=0)){mat2 Ji=mat2(dpy.y,-dpx.y,-dpy.x,dpx.x)/det;"
+ /* perf: skipped only where the 2 cm ring is under half a pixel on BOTH axes of the pixel's ground (its short
+    side pa*pa/px over 5 cm), where it returns the pixel itself anyway. Cutting it by the long side stopped the
+    smoothing of packed rut floors at a hard line ~5 m ahead while it was still 2 pixels wide across the rut.
+    Nothing uses it on untouched ground without the soft layer. */
+ "if(abs(det)>1e-14&&pa*pa<.05*px&&(worked>.003||soft_on!=0)){mat2 Ji=mat2(dpy.y,-dpx.y,-dpy.x,dpx.x)/det;"
  "for(int i=0;i<6;i++){float a=1.0472*float(i)+.5236;vec2 o=Ji*(vec2(cos(a),sin(a))*.02);float ol=length(o);if(ol>10.)o*=10./ol;"
  "blur+=texelFetch(background,clamp(pix+ivec2(round(o)),ivec2(0),vmax),0).rgb;bw+=1.;}}"
  "vec3 albedo=mix(native,blur/bw,worked*(.12+.28*firm));" /* loose dirt keeps its grit, packed lines smooth out */
  /* clods (~4-6 cm) on loose soil, crumbs (~2 cm) on worked soil, soft swell (~20 cm) */
+#if MXDIRT_DETAIL_AREA
+ "float f_big=1.-smoothstep(.020,.100,pa),f_mid=1.-smoothstep(.008,.040,pa);"
+#else
  "float f_big=1.-smoothstep(.010,.025,px),f_mid=1.-smoothstep(.004,.010,px);"
+#endif
  "vec4 k1=texture(clods,p/.45),k2=texture(clods,turn(p,.83)/.31+vec2(.37,.11)),k3=texture(clods,turn(p,1.9)/1.3+vec2(.71,.29));"
  "float a_clod=lumpy*f_big,a_crumb=worked*(.30+.35*(1.-firm))*f_mid,a_soft=worked*(.25+.5*loose)*f_big;"
  "vec2 micro=(k1.rg-.5)*2.*.42*a_clod+turn((k2.rg-.5)*2.,-.83)*.30*a_crumb+turn((k3.rg-.5)*2.,-1.9)*.30*a_soft;"
@@ -214,7 +242,13 @@ static const char mxdirt_fragment_body[]=
  "s_new=mix(mix(a4[0],a4[1],ff.x),mix(a4[2],a4[3],ff.x),ff.y)/3.;}"
  "if(tg>127.5&&s_press>.05){float a=mod(tg+.5,32.)/32.*3.14159265;vec2 f=vec2(cos(a),sin(a)),n=vec2(-f.y,f.x);"
  "float k0=kblock(q,f,n),kx=kblock(q+vec2(.003,0),f,n),kz=kblock(q+vec2(0,.003),f,n);"
- "kg=-vec2(kx-k0,kz-k0)/.003*.005*s_press*(.35+.65*damp)*(.55+.45*s_new)*(1.-smoothstep(.006,.016,px));}"
+ "kg=-vec2(kx-k0,kz-k0)/.003*.005*s_press*(.35+.65*damp)*(.55+.45*s_new)*(1.-smoothstep("
+#if MXDIRT_DETAIL_AREA
+ ".008,.030,pa"
+#else
+ ".006,.016,px"
+#endif
+ "));}"
  "micro+=(sg*(.8+.2*s_new)+kg)*s_vis;" /* settled soil softens a little, fresh soil is crisp */
  /* dry soil: lips and trench walls crumble into loose grains */
  "micro+=turn((k1.rg-.5)*2.,0.)*.35*s_lip*(1.-damp)*f_big*s_vis;}"
@@ -223,18 +257,21 @@ static const char mxdirt_fragment_body[]=
  "albedo=mix(albedo,blur/bw,.18*sl_loose);micro+=turn((k2.rg-.5)*2.,-.83)*.16*sl_loose*f_mid;}"
  /* roost clods: lumps on a jittered 11 cm lattice, present where the sim's clod
     density at the lump's own centre beats its random rank; lit as domes with a
-    soft contact shadow cast away from the sun. ~2-5 cm, bigger when damp. */
+    soft contact shadow cast away from the sun. ~2-5 cm, bigger when damp.
+    Each lump fades by its OWN size on screen (lv: full at ~5 pixels across its short side, gone under ~2).
+    They are drawn shapes, not a mip-mapped texture: any smaller and a lump falls between pixel rows and
+    flashes as a dark speck while riding (seen 4-12 m ahead at a 124 degree field of view). */
  "float lump=0.,lshade=1.;vec2 lslope=vec2(0);"
- "if(state_on!=0&&s_clod>.004&&f_big>.01){"
+ "if(state_on!=0&&s_clod>.004&&px<.055){"
  "vec2 ci=floor(p/.11),sh=L.xz/max(L.y,.3);"
  "for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){"
  "vec2 id=ci+vec2(i,j);vec3 r=rnd(id);vec2 cw=(id+.15+.7*r.xy)*.11;"
  "if(.001+.999*r.z>textureLod(state,(g+(cw-p)/spacing+shift)/SIDE,0.).a*1.15)continue;"
- "float rad=(.012+.026*fract(r.x*7.31+r.y*3.17))*(.8+.45*damp);vec2 d=p-cw;float t=length(d)/rad;"
- "if(t<1.){float hgt=sqrt(1.-t*t);if(hgt>lump){lump=hgt;lslope=-d/(rad*max(hgt,.25));}}"
- "lshade=min(lshade,mix(.6,1.,smoothstep(.5,1.05,length(p-(cw-sh*rad*.8))/(rad*1.1))));}"
- "if(lump>0.)lshade=1.;lump*=f_big;"
- "micro=mix(micro,lslope*1.3,smoothstep(0.,.25,lump));lshade=mix(1.,lshade,f_big);}"
+ "float rad=(.012+.026*fract(r.x*7.31+r.y*3.17))*(.8+.45*damp),lv=1.-smoothstep(.4*rad,1.1*rad,px);if(lv<=0.)continue;vec2 d=p-cw;float t=length(d)/rad;"
+ "if(t<1.){float hgt=sqrt(1.-t*t);if(hgt*lv>lump){lump=hgt*lv;lslope=-d/(rad*max(hgt,.25));}}"
+ "lshade=min(lshade,mix(1.,mix(.6,1.,smoothstep(.5,1.05,length(p-(cw-sh*rad*.8))/(rad*1.1))),lv));}"
+ "if(lump>0.)lshade=1.;"
+ "micro=mix(micro,lslope*1.3,smoothstep(0.,.25,lump));}"
  "vec3 nb=normalize(vec3(-base_slope.x,1.,-base_slope.y));"
  "vec3 nd=normalize(vec3(-(sharp_slope.x+.3*dslope.x+micro.x),1.,-(sharp_slope.y+.3*dslope.y+micro.y)));"
  /* sun shadows from the deformation only: occlusion along the sun ray over
@@ -254,6 +291,9 @@ static const char mxdirt_fragment_body[]=
     laps), so the latest passes stand out and the dark ruts stay easy to read against it. A fresh trench
     floor is a touch darker. (Dark loose soil hid the ruts: the whole line went dark.) */
  "val+=(-.07*s_press*(.5+.5*damp)+s_lip*(.06+.10*s_new)*(1.-.5*damp)-.04*s_new*s_press)*s_vis;sat+=(-.06*s_lip*(.4+.6*s_new)+.04*s_new*s_press)*s_vis;"
+ /* depth shading: up to -24 % in a rut 11 cm deep, +11 % on soil raised 15 cm, at relief 1. Less where the
+    floor is already darkened as damp, so deep wet ruts do not go black. */
+ "val*=1.-relief*.24*r_dark*(1.-.45*wetv)+relief*.11*r_light;"
  "vec3 soilc=max(mix(vec3(lum),albedo,sat),0.)*val;"
  /* sheen: wet rut bottoms and damp hard-pack, never loose dirt or grass */
  "vec3 V=normalize(camera-w),Hv=normalize(L+V);"

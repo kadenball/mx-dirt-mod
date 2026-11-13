@@ -3,7 +3,7 @@
 #include "mxdirt_dirt.h"
 #include "mxdirt_camera.h"
 typedef struct MxDirtGl MxDirtGl;
-typedef struct {float strength,base_loose,fade_start,fade_end;} MxDirtLook;
+typedef struct {float strength,base_loose,fade_start,fade_end,relief;} MxDirtLook; /* relief: depth shading 0..2 (0 = off) */
 /* Dirt Material GL owner. GL 4.x compatibility context only, bound to the
    creating context/thread; generation fixed until destroy. Private objects:
    one static (MXDIRT_CELLS+1)^2 grid mesh (VBO+IBO+VAO), RG16 window heights, RGBA8

@@ -1,8 +1,8 @@
 #ifndef MXB_SOIL_LIVE_WEAR_H
 #define MXB_SOIL_LIVE_WEAR_H
 /* Live wear level: how much each of your own laps wears the track ([soil] live_wear_percent).
-   k = 0 ("Low") is the 1.1.0 live tuning: realistic one-rider growth, the line packs in and
-   bumps stay small. k = 1 ("Medium", default) is tuned on Maryland so ~15 of your laps wear
+   k = 0 ("Realistic", the default) is the 1.1.0 live tuning: realistic one-rider growth, the line packs in and
+   bumps stay small. k = 1 ("Medium") is tuned on Maryland so ~15 of your laps wear
    it about like the "Practice" pre-wear (25 virtual riders), measured on what the game
    actually rides after publication: bump count/heights, deep cells, rut depth.
    Bumps grow faster per pass (deeper rows, deeper braking troughs, stronger swing), the

@@ -55,6 +55,15 @@ int mxdirt_session_set_extra_riders(MxdirtSession *,unsigned riders);
 /* Live wear of each pass shared over 1..8 lines riding with the player (1 = one groove). */
 int mxdirt_session_set_live_gate(MxdirtSession *,unsigned lines);
 int mxdirt_session_set_live_wear(MxdirtSession *,float percent); /* 0 Low .. 100 Medium .. 200 */
+/* Live tuning (the launcher, while riding): the same values and ranges as the setters above, taken at any
+   time between steps. Each applies to what is worn from now on; what is already worn stays. A negative
+   field is left as it is. moisture_percent waters (or dries) the whole track to that value now.
+   All or nothing: 0 if any given value is out of range. */
+typedef struct {
+    float depth_percent,firmness_percent,moisture_percent,bumps_percent,rolling_bumps_percent;
+    float hardness_percent,breakdown_percent,drying_percent,sweep_percent,capture_percent,cohesion_percent,clods_percent;
+} MxdirtLiveSettings;
+int mxdirt_session_live_settings(MxdirtSession *,const MxdirtLiveSettings *);
 int mxdirt_session_dirt_moisture_now(const MxdirtSession *,float *out);
 /* [0] net volume error m^3, [1] cut, [2] compacted, [3] roost, [4] dust, [5] avalanche moves. */
 int mxdirt_session_dirt_sim_stats(const MxdirtSession *,double out[6]);

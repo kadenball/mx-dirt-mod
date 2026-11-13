@@ -31,9 +31,9 @@ enum { UNITS=6 };
 /* Soft layer window: SOFT_SIDE^2 texels in SOFT_SLOTS^2 tile slots, slot = tile index mod SOFT_SLOTS. */
 enum { SOFT_TILE=32,SOFT_SLOTS=64,SOFT_SIDE=SOFT_TILE*SOFT_SLOTS };
 enum { U_VIEW,U_PROJECTION,U_HEIGHTS,U_BACKGROUND,U_CLODS,U_VIEWPORT,U_TEXEL0,U_CAMERA,U_SPACING,U_HEIGHT_SCALE,U_FADE,U_BOUNDS,U_STRENGTH,U_LOOSE,U_STATE,U_STATE_ON,
- U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_COUNT };
+ U_SOFT,U_SOFT_ON,U_SOFT_ORIGIN,U_SOFT_WINDOW,U_SOFT_CELL,U_SOFT_DEPTH,U_SOFT_UNIT,U_SOFT_MODE,U_SOFT_OCC,U_SOFT_TILE,U_SHIFT,U_RELIEF,U_COUNT };
 static const char *const uniform_names[U_COUNT]={"view","projection","heights","background","clods","viewport_origin","texel0","camera","spacing","height_scale","fade","bounds","strength","base_grain","state","state_on",
- "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift"};
+ "soft","soft_on","soft_origin","soft_window","soft_cell","soft_depth","soft_unit","soft_mode","soft_occ","soft_tile","shift","relief"};
 /* Bindings this pass changes and must hand back unchanged. */
 typedef struct {GLint program,active,unpack_buffer,unpack[6],texture[UNITS],sampler[UNITS];} SavedBindings;
 static const GLenum unpack_names[6]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SWAP_BYTES,GL_UNPACK_LSB_FIRST};
@@ -54,6 +54,8 @@ struct MxDirtGl {
     run the full state check (one in MXDIRT_STATE_RECHECK); read back at the next such frame, so nothing
     waits. A timestamp query is never 'active', so it cannot disturb a query of the game's. Optional. */
  GLuint timer[2];int timing,gpu_fresh;double gpu_ms;
+ /* uploads: tight copy of a rectangle that is narrower than the texture (see upload) */
+ unsigned char *stage;
  /* perf: the host GL state at the terrain call, queried in full only every MXDIRT_STATE_RECHECK frames (and
     after any skipped frame). Every glGet* makes NVIDIA's threaded driver drain its queue - right after the
     terrain's ~1500 draws ~65 queries a frame serialized the game's render thread with the driver. */
@@ -111,6 +113,7 @@ int mxdirt_gl_destroy(MxDirtGl *p){
  if((p->program[0]&&program==(GLint)p->program[0])||(p->program[1]&&program==(GLint)p->program[1])||(p->vao&&vao==(GLint)p->vao)||(p->vbo&&buffer==(GLint)p->vbo))return 0;
  if(p->resolve_fbo&&p->delete_framebuffers)p->delete_framebuffers(1,&p->resolve_fbo);
  if(p->timer[0]&&p->delete_queries)p->delete_queries(2,p->timer);
+ free(p->stage);
  GLuint textures[UNITS]={p->heights,p->background,p->clods,p->state,p->soft,p->occ};for(unsigned k=0;k<UNITS;k++)if(textures[k])glDeleteTextures(1,textures+k);
  GLuint samplers[4]={p->linear,p->nearest,p->mipped,p->wrapped};for(unsigned k=0;k<4;k++)if(samplers[k]&&p->delete_samplers)p->delete_samplers(1,samplers+k);
  for(unsigned k=0;k<2;k++)if(p->program[k]&&p->delete_program)p->delete_program(p->program[k]);if(p->vao&&p->delete_vao)p->delete_vao(1,&p->vao);
@@ -126,6 +129,7 @@ int mxdirt_gl_create(MxDirtGl **out,uint64_t generation){
  if(!out||!generation)return 0;gl_stage=1;
  if(!wglGetCurrentContext())return 0;
  MxDirtGl *p=calloc(1,sizeof(*p));if(!p)return 0;p->context=wglGetCurrentContext();p->thread=GetCurrentThreadId();
+ p->stage=malloc((size_t)MXDIRT_SIDE*MXDIRT_SIDE*4);if(!p->stage){free(p);return 0;}
  float *cells=NULL;uint32_t *indices=NULL;
  /* A legacy (wglCreateContext) context reports no profile bits on some drivers and
     behind ReShade's opengl32 - it IS compatibility; only a pure core profile is refused. */
@@ -186,19 +190,25 @@ fail:free(cells);free(indices);mxdirt_gl_destroy(p);return 0;
 }
 /* Allocates the SIDE x SIDE window texture on the bound unit once (with everything), then sends only the
    rectangles the CPU side listed since the last upload (n > MXDIRT_RECTS: everything) and clears the list.
-   Returns 0 if storage failed. */
-static int upload(int *ready,GLint internal,GLenum format,GLenum type,const void *data,size_t texel_bytes,MxDirtDirty *dirty){
+   Returns 0 if storage failed.
+   Every upload uses the default unpack state (tightly packed rows): in 1.6.0 rectangles were sent with
+   GL_UNPACK_ROW_LENGTH set, and each such call cost ~0.2 ms in the game (NVIDIA's threaded driver; not in
+   a single-threaded benchmark) - a recentre sent a dozen. Whole-width rectangles are contiguous in the
+   storage and go as they are; narrower ones are copied tight into `stage` first. More than UPLOAD_CALLS
+   rectangles go as one whole upload. */
+enum { UPLOAD_CALLS=6 };
+static int upload(int *ready,GLint internal,GLenum format,GLenum type,const void *data,size_t texel_bytes,MxDirtDirty *dirty,unsigned char *stage){
  const int side=MXDIRT_SIDE;
  if(!*ready){void *neutral=NULL;if(!data){neutral=calloc((size_t)side*side,texel_bytes);if(!neutral)return 0;}
   glTexImage2D(GL_TEXTURE_2D,0,internal,side,side,0,format,type,data?data:neutral);free(neutral);glTexParameteri(GL_TEXTURE_2D,X_TEXTURE_MAX_LEVEL,0);
   GLint width=0;glGetTexLevelParameteriv(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&width);if(width!=side)return 0;*ready=1;
   if(data&&dirty)dirty->n=0;return 1;}
  if(!data||!dirty||!dirty->n)return 1;
- if(dirty->n>MXDIRT_RECTS)glTexSubImage2D(GL_TEXTURE_2D,0,0,0,side,side,format,type,data);
- else{glPixelStorei(GL_UNPACK_ROW_LENGTH,side);
-  for(uint32_t k=0;k<dirty->n;k++){const MxDirtRect *r=dirty->r+k;if((int)r->x+r->w>side||(int)r->y+r->h>side)continue;
-   glTexSubImage2D(GL_TEXTURE_2D,0,r->x,r->y,r->w,r->h,format,type,(const unsigned char*)data+((size_t)r->y*side+r->x)*texel_bytes);}
-  glPixelStorei(GL_UNPACK_ROW_LENGTH,0);}
+ if(dirty->n>UPLOAD_CALLS||texel_bytes>4)glTexSubImage2D(GL_TEXTURE_2D,0,0,0,side,side,format,type,data);
+ else for(uint32_t k=0;k<dirty->n;k++){const MxDirtRect *r=dirty->r+k;if((int)r->x+r->w>side||(int)r->y+r->h>side)continue;
+  const unsigned char *src=(const unsigned char*)data+((size_t)r->y*side+r->x)*texel_bytes;
+  if(r->w<side){const size_t row=(size_t)r->w*texel_bytes;for(unsigned y=0;y<r->h;y++)memcpy(stage+y*row,src+(size_t)y*side*texel_bytes,row);src=stage;}
+  glTexSubImage2D(GL_TEXTURE_2D,0,r->x,r->y,r->w,r->h,format,type,src);}
  dirty->n=0;return 1;
 }
 /* Soft-layer window: every tile slot holds the tile it should hold at its
@@ -231,6 +241,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
  int state_on=state&&state->valid&&state->rgba;
  int soft_on=soft&&soft->tile&&soft->serial&&soft->side==SOFT_TILE&&soft->tiles_x&&soft->tiles_z&&soft->tiles_x<=65536&&soft->tiles_z<=65536&&
   isfinite(soft->cell)&&soft->cell>=.005f&&soft->cell<=.2f&&isfinite(soft->thickness)&&soft->thickness>0.f&&soft->thickness<=.1f&&isfinite(soft->unit)&&soft->unit>=.0001f&&soft->unit<=.005f&&isfinite(soft->origin_x)&&isfinite(soft->origin_z);
+ if(!(look->relief>=0)||look->relief>2)return -1;
  if(look->strength<0||look->strength>2||look->base_loose<0||look->base_loose>1||!(look->fade_start>=0)||!(look->fade_end>look->fade_start)||!(w->spacing_x>0)||!(w->spacing_z>0)||!(w->height_scale>0))return -1;
  for(unsigned k=0;k<16;k++)if(!isfinite(scope->modelview[k])||!isfinite(scope->projection[k]))return 0;
  if(look->strength<=0)return 1;
@@ -273,7 +284,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   GLint width=0;glGetTexLevelParameteriv(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&width);if(width!=MXDIRT_CLOD_SIDE)goto restore;p->clods_ready=1;}
  /* Unit3 per-texel sim state; same layout as the heights. Neutral = untouched. */
  p->active_texture(X_TEXTURE0+3);
- if(!upload(&p->state_ready,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE,state_on?state->rgba:NULL,4,state_on?state->dirty:NULL))goto restore;
+ if(!upload(&p->state_ready,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE,state_on?state->rgba:NULL,4,state_on?state->dirty:NULL,p->stage))goto restore;
  /* Unit4 soft layer window: neutral once, then only tiles that entered the window or changed. */
  p->active_texture(X_TEXTURE0+4);float soft_window[4]={0,0,0,0};
  if(!p->soft_ready){unsigned char *n=malloc((size_t)SOFT_SIDE*SOFT_SIDE*2);if(!n)goto restore;
@@ -301,7 +312,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
    glTexSubImage2D(GL_TEXTURE_2D,0,0,0,SOFT_SLOTS,SOFT_SLOTS,GL_RED,GL_UNSIGNED_BYTE,wide);p->occ_dirty=0;}
  }
  p->active_texture(X_TEXTURE0);
- if(!upload(&p->heights_ready,X_RG16,X_RG,GL_UNSIGNED_SHORT,w->texels,4,w->dirty))goto restore;
+ if(!upload(&p->heights_ready,X_RG16,X_RG,GL_UNSIGNED_SHORT,w->texels,4,w->dirty,p->stage))goto restore;
  p->active_texture(X_TEXTURE0+1);
  /* Snapshot the native colour of this viewport from the actual DRAW target, then restore the source FBO's
     read selector, the read binding and (resolve path) the draw binding and scissor test.
@@ -356,7 +367,7 @@ int mxdirt_gl_draw(MxDirtGl *p,const MxDirtCameraScope *scope,const MxDirtWindow
   p->ui(u[U_SOFT_MODE],soft_on?(soft->solid?1:0):0);
   p->u1f(u[U_SOFT_CELL],soft_on?soft->cell:.025f);p->u1f(u[U_SOFT_DEPTH],soft_on?soft->thickness:.03f);p->u1f(u[U_SOFT_UNIT],soft_on?soft->unit:.001f);
   p->ui(u[U_SOFT_OCC],5);p->u1f(u[U_SOFT_TILE],soft_on?soft->cell*SOFT_TILE:.8f);
-  p->u2f(u[U_SHIFT],(float)w->shift_x,(float)w->shift_z);}
+  p->u2f(u[U_SHIFT],(float)w->shift_x,(float)w->shift_z);p->u1f(u[U_RELIEF],look->relief);}
  p->use_program(p->program[0]);
  p->disable_indexed(GL_BLEND,0);p->color(0,1,1,1,0);
  glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_FALSE);for(unsigned k=1;k<8;k++)glDisable(caps[k]);glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);

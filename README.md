@@ -253,19 +253,31 @@ Open **MX Dirt Mod** from your desktop. If the shortcut is missing, run `MX Bike
   - Destroyed (130)
 - **Wear spread:** how far the virtual riders spread from your lines. Lower gives fewer, deeper lines.
 - **Wear from your laps:** how fast your own riding wears the track.
-  - Medium (default): about 15 of your laps wear a track like the Practice level.
-  - Low: slow, realistic one-rider wear. Your line packs in and bumps stay small.
-  - Arcade (hero dirt): not realistic, just fun. Wear builds twice as fast; deep, grippy ruts and tall berms you can rail; less chop; the dirt stays damp all session. Picking it also fills in its own rut depth (80), moisture (45), rolling bumps (30), soft layer (100 mm), look strength (160) and starting wear (End of day), and writes rut capture 150, wall cohesion 150, packed hardness 70, braking bumps 60, drying 0 and roost clods 200 to `mx_dirt.ini`. Picking Low or Medium again puts all of them back.
+  - Realistic (default): slow one-rider wear. Your line packs in and bumps stay small.
+  - Medium: about 15 of your laps wear a track like the Practice level.
+  - Arcade (hero dirt): not realistic, just fun. Wear builds twice as fast; deep, grippy ruts and tall berms you can rail; less chop; the dirt stays damp all session. Picking it also fills in its own rut depth (80), moisture (45), rolling bumps (30), soft layer (100 mm), look strength (160) and starting wear (End of day), and writes rut capture 150, wall cohesion 150, packed hardness 70, braking bumps 60, drying 0 and roost clods 200 to `mx_dirt.ini`. Picking Realistic or Medium again puts all of them back.
 - **Dirt:** rut depth, track firmness, moisture, rolling bumps, lines riding with you, and the soft dirt layer thickness.
-- **Look:** dirt look strength and distance, dirt shading on/off.
+- **Look:** dirt look strength and distance, rut and bump contrast, dirt shading on/off.
 - **Record my laps:** needed for pre-wear.
 - **Keep saved wear:** pre-wear only fresh tracks. Turn it off to wear the track again on every load, so wear stacks up.
 - **Online wear:** experimental and untested. See [Online wear](#8-online-wear-experimental-untested).
 - **Saved track wear → Reset this track's wear:** the chosen track starts fresh next time. Its saved wear is moved to the backup folder, not deleted.
 - **Recommended:** fills in the default settings; press Save to keep them.
 - **Save / Save & start MX Bikes**
+- **Apply live while MX Bikes runs:** on by default. See below.
+- **Stay on top of the game:** for a game running in a window or borderless. In exclusive fullscreen, use Alt+Tab.
+- **In the game, press F10** to bring the launcher up in front (it starts if it isn't open). In exclusive fullscreen the game minimises while the launcher is in front; click MX Bikes in the taskbar or press Alt+Tab to go back. Change the key with `launcher_key` in `mx_dirt_render.ini`.
 
-**Changes apply the next time MX Bikes starts.**
+### Tuning while you ride
+
+Leave the launcher open while MX Bikes runs. Every change you make is saved and shows in the game about half a second later, with no restart:
+
+- **Right away:** rut depth, firmness, moisture (the track is watered or dried to the new value at once), rolling bumps, wear from your laps, lines riding with you, look strength and distance, dirt shading on/off. The dirt settings change how the track wears from then on; ruts and bumps that are already there stay.
+- **The next time a track loads:** starting wear, wear spread, soft layer thickness, keep saved wear, online wear.
+- **After a restart:** dirt mod enabled. Dirt shading can only be switched back on live if it was on when the game started.
+- In an online race the running track keeps its settings, because every player must use the same ones.
+
+With MX Bikes closed, changes apply the next time it starts. Editing the `.ini` files by hand works the same way: the game re-reads a file when it is saved.
 
 ---
 
@@ -291,7 +303,7 @@ All settings live in two text files in `MX Bikes\plugins`, with comments. The la
 | `sharp_ruts` | 0 | 0/1 | Sharper ruts; diagonal ruts can show teeth. |
 | `braking_bumps_percent` | 100 | 0–200 | Braking bumps and bump stress. |
 | `rolling_bumps_percent` | 60 | 0–100 | Bumps without braking or gas. |
-| `live_wear_percent` | 100 | 0–200 | How much each of your laps wears the track. 100 = Medium (~15 laps = Practice), 0 = Low. |
+| `live_wear_percent` | 0 | 0–200 | How much each of your laps wears the track. 0 = Realistic, 100 = Medium (~15 laps = Practice). |
 | `live_gate_lines` | 1 | 1–8 | Your live wear shared over N nearby lines. |
 | `extra_riders` | 0 | 0–15 | Test mode: extra riders copy each of your contacts. |
 | `record_ghosts` | 1 | 0/1 | Record your laps. |
@@ -318,6 +330,8 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `dirt_material` | 1 | The dirt shading pass. |
 | `dirt_strength` | 135 | Strength of the shading, 0–200 %. |
 | `dirt_loose` | 55 | Fine loose grain on worked ground, 0–100 %. |
+| `dirt_relief` | 100 | Depth shading, 0–200 % (0 = off). Ground dug below the original surface gets darker with depth (rut floors, bump troughs, berm grooves); raised ground gets lighter (lips, bump crests, berm tops). It doesn't use the sun, so the shapes read in flat light and from far away. Untouched ground is never changed. |
+| `launcher_key` | F10 | Key (F1–F12) that brings up the launcher while you are in the game. Empty = no key. |
 | `dirt_fade_start` / `dirt_fade_end` | 75 / 100 | Distance (m) where the look fades out; the end is 100 at most (the dirt is drawn about 95 m ahead, 65 m to the sides). A file that still has the old 45 / 60 is read as 75 / 100 (for 60 m write 44 / 60; the launcher does). |
 | `soft_layer` | 1 | Draw the soft dirt layer. |
 | `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
@@ -458,7 +472,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.6.0   # both + the release zip in build\
+.\package.ps1 -Version 1.7.0   # both + the release zip in build\
 ```
 
 Source layout:

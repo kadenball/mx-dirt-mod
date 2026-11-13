@@ -1,10 +1,12 @@
 # MX Dirt Mod launcher: turn the mod on/off, pick how worn tracks start, tune the dirt,
-# reset a track's saved wear, start MX Bikes. Settings are read by the plugins when the
-# game starts, so changes apply on the next launch.
+# reset a track's saved wear, start MX Bikes. The plugins read their settings when the game
+# starts and again whenever a settings file is saved while it runs, so with MX Bikes open
+# most changes show in the game right away (the dirt, bumps, wear speed, lines and the look);
+# starting wear, wear spread and the soft layer's depth are used when the next track loads.
 param([string]$GameDir='',
       [string]$ProfileDir="$([Environment]::GetFolderPath('MyDocuments'))\PiBoSo\MX Bikes\profiles",
       [string]$BackupDir="$([Environment]::GetFolderPath('MyDocuments'))\PiBoSo\MX Bikes\mx_dirt_mod_backups",
-      [switch]$SelfTest,[string]$Snapshot,[switch]$ApplyRecommended)
+      [switch]$SelfTest,[string]$Snapshot,[switch]$ApplyRecommended,[switch]$OnTop,[int]$MaxHeight=0)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -46,11 +48,21 @@ function Set-Val($lines,$sec,$key,$val){
     if($secAt -lt 0){ $lines.Add(''); $lines.Add("[$sec]"); $lines.Add("$key=$val") } else { $lines.Insert($last+1,"$key=$val") } }
 
 function Game-Running { [bool](Get-Process -Name mxbikes -ErrorAction SilentlyContinue) }
+# A settings file is replaced in one step (the running game never reads a half-written file),
+# and only when its content changed (the game re-reads a file whenever it is saved).
+function Write-Ini($path,$lines){
+    $new=[string[]]$lines
+    if((Test-Path $path) -and (([IO.File]::ReadAllLines($path,$Enc) -join "`n") -ceq ($new -join "`n"))){ return $false }
+    $tmp="$path.tmp"; [IO.File]::WriteAllLines($tmp,$new,$Enc)
+    try{ [IO.File]::Replace($tmp,$path,[NullString]::Value) }
+    catch{ [IO.File]::WriteAllLines($path,$new,$Enc); Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    $true }
+$LiveNote='Starting wear, wear spread and soft layer depth apply the next time a track loads.'
 
 # ---- settings: [file, section, key, label, min, max, recommended, tip] ----
 $WearLevels=[ordered]@{ 'Off (fresh track)'=0; 'Practice'=25; 'After moto 1 (Pro look)'=50; 'End of day'=80; 'Destroyed'=130 }
 # live_wear_percent: how much each of your own laps wears the track
-$LiveLevels=[ordered]@{ 'Low (slow, realistic)'=0; 'Medium (default)'=100; 'Arcade (hero dirt)'=200 }
+$LiveLevels=[ordered]@{ 'Realistic (default)'=0; 'Medium (faster wear)'=100; 'Arcade (hero dirt)'=200 }
 # Arcade: big readable features that build fast and are fun to rail, less chop that kicks you around.
 # Shown settings it fills in, and ini-only settings it writes (back to 100 when you leave Arcade).
 $ArcadeShown=@{ dirt_sim_depth_percent=80; dirt_sim_moisture_percent=45; rolling_bumps_percent=30; soft_layer_mm=100; dirt_strength=160 }
@@ -65,6 +77,7 @@ $Num=@(
   @('active','soil','live_gate_lines','Lines riding with you',1,8,1,'1 = only your own line wears. More = virtual riders share your wear on nearby lines.'),
   @('active','soil','soft_layer_mm','Soft dirt layer (mm)',0,100,85,'Loose top soil your tyres press marks into, with lips, roost crumbs and knob prints. Look only, the ruts you ride are unchanged. 0 = off.'),
   @('renderer','renderer','dirt_strength','Dirt look strength (%)',0,200,135,'How strongly worked dirt is shaded.'),
+  @('renderer','renderer','dirt_relief','Rut and bump contrast (%)',0,200,100,'Darker rut floors and bump troughs by depth, lighter berm tops and lips. Works in flat light and from far away. 0 = off.'),
   @('renderer','renderer','dirt_fade_end','Dirt look distance (m)',10,100,100,'Distance where the dirt shading fades out (max 100).')
 )
 $Chk=@(
@@ -81,7 +94,7 @@ $f.Font=New-Object Drawing.Font('Segoe UI',9.5);$f.AutoSize=$true;$f.AutoSizeMod
 $tip=New-Object Windows.Forms.ToolTip;$tip.AutoPopDelay=15000
 $tbl=New-Object Windows.Forms.TableLayoutPanel;$tbl.ColumnCount=2;$tbl.AutoSize=$true;$tbl.Dock='Fill'
 $f.Controls.Add($tbl)
-function Row($label,$ctl,$t){ $lb=New-Object Windows.Forms.Label;$lb.Text=$label;$lb.AutoSize=$true;$lb.Anchor='Left';$lb.Margin=New-Object Windows.Forms.Padding(0,6,12,6)
+function Row($label,$ctl,$t){ $lb=New-Object Windows.Forms.Label;$lb.Text=$label;$lb.AutoSize=$true;$lb.Anchor='Left';$lb.Margin=New-Object Windows.Forms.Padding(0,4,12,4)
     $ctl.Anchor='Left';$tbl.Controls.Add($lb);$tbl.Controls.Add($ctl);if($t){$tip.SetToolTip($lb,$t);$tip.SetToolTip($ctl,$t)} }
 function Header($text){ $h=New-Object Windows.Forms.Label;$h.Text=$text;$h.AutoSize=$true;$h.Font=New-Object Drawing.Font('Segoe UI',10,[Drawing.FontStyle]::Bold);$h.Margin=New-Object Windows.Forms.Padding(0,10,0,2)
     $tbl.Controls.Add($h);$tbl.SetColumnSpan($h,2) }
@@ -102,7 +115,7 @@ Row 'Starting wear' $wear 'Virtual riders ride your recorded laps before you sta
 $ctl=@{}
 foreach($n in $Num){ if($n[1] -eq 'renderer' -and -not $hdrR){ Header 'Look'; $hdrR=$true } elseif($n[2] -eq 'dirt_sim_depth_percent'){
         Header 'Wear while you ride'
-        Row 'Wear from your laps' $live 'How fast your own riding wears the track. Medium: about 15 of your laps wear it like the Practice level. Low: slow one-rider wear, your line packs in and bumps stay small. Arcade: hero dirt - wear builds twice as fast, deep grippy ruts and tall berms you can rail, less chop, stays damp all session (also sets rut depth, moisture, bumps, soft layer, look and starting wear).'
+        Row 'Wear from your laps' $live 'How fast your own riding wears the track. Realistic: slow one-rider wear, your line packs in and bumps stay small. Medium: about 15 of your laps wear it like the Practice level. Arcade: hero dirt - wear builds twice as fast, deep grippy ruts and tall berms you can rail, less chop, stays damp all session (also sets rut depth, moisture, bumps, soft layer, look and starting wear).'
         Header 'Dirt' }
     $u=New-Object Windows.Forms.NumericUpDown;$u.Minimum=$n[4];$u.Maximum=$n[5];$u.Width=80;$ctl[$n[2]]=$u;Row $n[3] $u $n[7] }
 foreach($c in $Chk){ $b=New-Object Windows.Forms.CheckBox;$b.Text=$c[3];$b.AutoSize=$true;$ctl[$c[2]]=$b;$tbl.Controls.Add($b);$tbl.SetColumnSpan($b,2) }
@@ -119,6 +132,15 @@ $rec=New-Object Windows.Forms.Button;$rec.Text='Recommended';$rec.AutoSize=$true
 $launch=New-Object Windows.Forms.Button;$launch.Text='Save && start MX Bikes';$launch.AutoSize=$true
 $btns.Controls.AddRange(@($save,$rec,$launch));$tbl.Controls.Add($btns);$tbl.SetColumnSpan($btns,2)
 $tip.SetToolTip($rec,'Fill in the tested settings (not saved until you press Save).')
+$liveRow=New-Object Windows.Forms.FlowLayoutPanel;$liveRow.AutoSize=$true;$liveRow.Margin=New-Object Windows.Forms.Padding(0,4,0,0)
+$tbl.Controls.Add($liveRow);$tbl.SetColumnSpan($liveRow,2)
+$liveChk=New-Object Windows.Forms.CheckBox;$liveChk.Text='Apply live while MX Bikes runs';$liveChk.AutoSize=$true;$liveChk.Checked=$true
+$liveRow.Controls.Add($liveChk)
+$tip.SetToolTip($liveChk,'With MX Bikes open, every change you make here is saved and shows in the game about half a second later. Off = nothing changes until you press Save.')
+$topChk=New-Object Windows.Forms.CheckBox;$topChk.Text='Stay on top of the game';$topChk.AutoSize=$true
+$liveRow.Controls.Add($topChk)
+$tip.SetToolTip($topChk,'Stays above MX Bikes when the game runs in a window or borderless. In exclusive fullscreen, use Alt+Tab.')
+$topChk.Add_CheckedChanged({ $f.TopMost=$topChk.Checked })
 
 function Load-Tracks {
     $track.Items.Clear()
@@ -128,22 +150,24 @@ function Load-Tracks {
 $script:TrackPath=@{}
 
 function Load-All {
+    $script:Loading=$true
     $script:L=@{}; foreach($k in $Ini.Keys){ $script:L[$k]=Read-Lines $Ini[$k] }
     $enabled.Checked=(Get-Val $L.active 'active' 'enabled' '1') -eq '1' -and (Get-Val $L.renderer 'renderer' 'enabled' '1') -eq '1' -and (-not $L.ld -or (Get-Val $L.ld 'mod' 'enabled' '0') -eq '1')
     $r=[int](Get-Val $L.active 'soil' 'prewear_riders' '50'); $script:LoadedRiders=$r
     $name=($WearLevels.Keys | Where-Object { $WearLevels[$_] -eq $r } | Select-Object -First 1)
     if(-not $name){ $name="Custom ($r riders)"; if(-not $wear.Items.Contains($name)){[void]$wear.Items.Add($name)} }
     $wear.SelectedItem=$name
-    $lv=[int](Get-Val $L.active 'soil' 'live_wear_percent' '100')
+    $lv=[int](Get-Val $L.active 'soil' 'live_wear_percent' '0')
     $ln=($LiveLevels.Keys | Where-Object { $LiveLevels[$_] -eq $lv } | Select-Object -First 1)
     if(-not $ln){ $ln="Custom ($lv %)"; if(-not $live.Items.Contains($ln)){[void]$live.Items.Add($ln)} }
-    $script:Loading=$true;$live.SelectedItem=$ln;$script:Loading=$false;$script:LastLive=$ln
+    $live.SelectedItem=$ln;$script:LastLive=$ln
     foreach($n in $Num){ $v=[int](Get-Val $L[$n[0]] $n[1] $n[2] "$($n[6])"); $ctl[$n[2]].Value=[Math]::Max($n[4],[Math]::Min($n[5],$v)) }
     foreach($c in $Chk){ $ctl[$c[2]].Checked=(Get-Val $L[$c[0]] $c[1] $c[2] "$($c[4])") -eq '1' }
+    $script:Loading=$false
     Load-Tracks; Update-Status }
 function Update-Status {
     $status.ForeColor=[Drawing.Color]::DimGray
-    $status.Text=if(Game-Running){'MX Bikes is running: saved changes apply the next time you start it.'}else{'Changes apply the next time MX Bikes starts.'}
+    $status.Text=if(Game-Running){"MX Bikes is running: changes show in the game right away. $LiveNote"}else{'MX Bikes is not running: changes apply when it starts. Open this window while you ride to tune the dirt live.'}
     $resetTrack.Enabled=$track.Items.Count -gt 0 -and -not (Game-Running) }
 
 function Save-All {
@@ -166,15 +190,15 @@ function Save-All {
     $end=[int]$ctl['dirt_fade_end'].Value; $start=[Math]::Max(5,[int]($end*.75)); if($end -eq 60){ $start=44 }
     Set-Val $L.renderer 'renderer' 'dirt_fade_start' "$start"
     foreach($c in $Chk){ Set-Val $L[$c[0]] $c[1] $c[2] $(if($ctl[$c[2]].Checked){'1'}else{'0'}) }
-    foreach($k in $Ini.Keys){ [IO.File]::WriteAllLines($Ini[$k],[string[]]$L[$k],$Enc) }
+    foreach($k in $Ini.Keys){ [void](Write-Ini $Ini[$k] $L[$k]) }
     $status.ForeColor=[Drawing.Color]::DarkGreen
-    $status.Text="Saved $(Get-Date -Format 'HH:mm:ss'). " + $(if(Game-Running){'Restart MX Bikes to apply.'}else{'Applies when MX Bikes starts.'})
+    $status.Text=if(Game-Running){"Applied in the game at $(Get-Date -Format 'HH:mm:ss'). $LiveNote"}else{"Saved $(Get-Date -Format 'HH:mm:ss'). Applies when MX Bikes starts."}
     # a new wear level only reaches tracks without saved wear
     if($r -ne $script:LoadedRiders -and $r -gt 0 -and $ctl['prewear_fresh_only'].Checked -and $track.Items.Count -and -not $SelfTest -and -not $ApplyRecommended -and -not (Game-Running)){
         $script:LoadedRiders=$r
         if([Windows.Forms.MessageBox]::Show("Tracks you already rode keep their saved wear.`n`nReset '$($track.SelectedItem)' so it starts at the new level?",'New wear level','YesNo','Question') -eq 'Yes'){ Reset-Track $false } } }
 
-function Apply-Recommended { $wear.SelectedItem='After moto 1 (Pro look)'; $live.SelectedItem='Medium (default)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
+function Apply-Recommended { $wear.SelectedItem='After moto 1 (Pro look)'; $live.SelectedItem='Realistic (default)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
     $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Recommended settings filled in - press Save.' }
 $rec.Add_Click({ Apply-Recommended })
 # picking Arcade fills in its settings; leaving it puts the recommended ones back
@@ -185,7 +209,7 @@ $live.Add_SelectedIndexChanged({ if($script:Loading){return}; $now="$($live.Sele
         $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Realistic settings filled in - press Save.' }
     $script:LastLive=$now })
 $save.Add_Click({ try{ Save-All }catch{ [Windows.Forms.MessageBox]::Show("Could not save:`n$($_.Exception.Message)",'MX Dirt Mod','OK','Error') | Out-Null } })
-$launch.Add_Click({ try{ Save-All; if(Game-Running){ $status.Text='MX Bikes is already running - restart it to apply.'; return }
+$launch.Add_Click({ try{ Save-All; if(Game-Running){ return }
         Start-Process 'steam://rungameid/655500'; $f.Close() }catch{ [Windows.Forms.MessageBox]::Show("Could not start:`n$($_.Exception.Message)",'MX Dirt Mod','OK','Error') | Out-Null } })
 function Reset-Track($ask){
     if(Game-Running){ Update-Status; return }
@@ -195,19 +219,36 @@ function Reset-Track($ask){
     Move-Item $p "$d\$n-$(Get-Date -Format 'yyyyMMdd-HHmmss').dfm"
     Load-Tracks; $status.ForeColor=[Drawing.Color]::DarkGreen; $status.Text="'$n' will start fresh (backup kept)." }
 $resetTrack.Add_Click({ Reset-Track $true })
+# live: with the game running, a change is saved (and so applied) half a second after the last edit
+$applyTimer=New-Object Windows.Forms.Timer;$applyTimer.Interval=450
+$applyTimer.Add_Tick({ $applyTimer.Stop(); if($liveChk.Checked -and (Game-Running)){ try{ Save-All }catch{ $status.ForeColor=[Drawing.Color]::Firebrick; $status.Text="Could not save: $($_.Exception.Message)" } } })
+function Touch { if($script:Loading){return}; if($liveChk.Checked -and (Game-Running)){ $applyTimer.Stop(); $applyTimer.Start() } }
+foreach($n in $Num){ $ctl[$n[2]].Add_ValueChanged({ Touch }) }
+foreach($c in $Chk){ $ctl[$c[2]].Add_CheckedChanged({ Touch }) }
+$wear.Add_SelectedIndexChanged({ Touch }); $live.Add_SelectedIndexChanged({ Touch }); $liveChk.Add_CheckedChanged({ Touch })
 $timer=New-Object Windows.Forms.Timer;$timer.Interval=3000;$timer.Add_Tick({ if($status.ForeColor -ne [Drawing.Color]::DarkGreen){Update-Status} });$timer.Start()
 
+# A window taller than the screen scrolls, so the buttons at the bottom are never out of reach.
+function Fit-Screen {
+    $limit=if($MaxHeight){$MaxHeight}else{[Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height-8}
+    $f.PerformLayout(); if($f.Height -le $limit){ return }
+    $cw=$f.ClientSize.Width; $chrome=$f.Height-$f.ClientSize.Height
+    $f.AutoSize=$false; $tbl.Dock='Top'; $f.AutoScroll=$true
+    $f.ClientSize=New-Object Drawing.Size(($cw+[Windows.Forms.SystemInformation]::VerticalScrollBarWidth+4),($limit-$chrome)) }
 Load-All
+Fit-Screen
 if($SelfTest){
     # exercise load -> save on whatever $GameDir points at (use a copy), then report what was written
     $enabled.Checked=$false; $wear.SelectedItem='Practice'; $ctl['prewear_spread_cm'].Value=140; Save-All
     $L2=Read-Lines $Ini.active; "active.enabled=$(Get-Val $L2 'active' 'enabled' '?') riders=$(Get-Val $L2 'soil' 'prewear_riders' '?') live_wear=$(Get-Val $L2 'soil' 'live_wear_percent' '?') spread=$(Get-Val $L2 'soil' 'prewear_spread_cm' '?')"
     $R2=Read-Lines $Ini.renderer; "renderer.enabled=$(Get-Val $R2 'renderer' 'enabled' '?') fade=$(Get-Val $R2 'renderer' 'dirt_fade_start' '?')..$(Get-Val $R2 'renderer' 'dirt_fade_end' '?')"
     "layout=$(if($Ini.ld){'dev'}else{'release'}) tracks=$($track.Items.Count)"
-    # Arcade on, then back to Medium: its ini-only settings go back to 100, shown ones to recommended
-    foreach($pick in $ArcadeLevel,'Medium (default)'){ $live.SelectedItem=$pick; Save-All; $L2=Read-Lines $Ini.active
+    # Arcade on, then back to Realistic: its ini-only settings go back to 100, shown ones to recommended
+    foreach($pick in $ArcadeLevel,'Realistic (default)'){ $live.SelectedItem=$pick; Save-All; $L2=Read-Lines $Ini.active
         "$pick -> live_wear=$(Get-Val $L2 'soil' 'live_wear_percent' '?') riders=$(Get-Val $L2 'soil' 'prewear_riders' '?') depth=$(Get-Val $L2 'soil' 'dirt_sim_depth_percent' '?') moisture=$(Get-Val $L2 'soil' 'dirt_sim_moisture_percent' '?') capture=$(Get-Val $L2 'soil' 'rut_capture_percent' '?') drying=$(Get-Val $L2 'soil' 'drying_percent' '?') roost=$(Get-Val $L2 'soil' 'roost_clods_percent' '?') strength=$(Get-Val (Read-Lines $Ini.renderer) 'renderer' 'dirt_strength' '?')" }
     $f.Dispose(); return }
 if($ApplyRecommended){ Apply-Recommended; Save-All; "saved: $($status.Text)"; $f.Dispose(); return }
 if($Snapshot){ $f.Show(); [Windows.Forms.Application]::DoEvents(); $bmp=New-Object Drawing.Bitmap($f.Width,$f.Height); $f.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$f.Width,$f.Height))); $bmp.Save($Snapshot); $f.Close(); return }
+# -OnTop: started by the launcher key in the game - come up in front of it and stay there
+if($OnTop){ $topChk.Checked=$true; $f.Add_Shown({ $f.Activate() }) }
 [void]$f.ShowDialog()

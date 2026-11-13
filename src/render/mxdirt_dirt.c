@@ -33,7 +33,9 @@ static void dirty_rect(MxDirtDirty *q,uint32_t x,uint32_t y,uint32_t w,uint32_t 
 static void dirty_box(MxDirtDirty *q,uint32_t sx,uint32_t sz,int32_t c0,int32_t c1,int32_t r0,int32_t r1){
  if(c1<=c0||r1<=r0)return;
  uint32_t x0=((uint32_t)c0+sx)%S,xn=(uint32_t)(c1-c0),z0=((uint32_t)r0+sz)%S,zn=(uint32_t)(r1-r0);
- if(xn>=S){x0=0;xn=S;}if(zn>=S){z0=0;zn=S;} /* the whole width or height is one rectangle */
+ /* the whole width or height is one rectangle; a box that crosses the seam in x goes as whole rows, so a
+    box is never more than two uploads (each upload call is what costs in the game, not its bytes) */
+ if(xn>=S||x0+xn>S){x0=0;xn=S;}if(zn>=S){z0=0;zn=S;}
  uint32_t xa=xn<S-x0?xn:S-x0,za=zn<S-z0?zn:S-z0;
  dirty_rect(q,x0,z0,xa,za);dirty_rect(q,0,z0,xn-xa,za);dirty_rect(q,x0,0,xa,zn-za);dirty_rect(q,0,0,xn-xa,zn-za);
 }
