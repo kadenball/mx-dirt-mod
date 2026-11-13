@@ -65,7 +65,7 @@ $Num=@(
   @('active','soil','live_gate_lines','Lines riding with you',1,8,1,'1 = only your own line wears. More = virtual riders share your wear on nearby lines.'),
   @('active','soil','soft_layer_mm','Soft dirt layer (mm)',0,100,85,'Loose top soil your tyres press marks into, with lips, roost crumbs and knob prints. Look only, the ruts you ride are unchanged. 0 = off.'),
   @('renderer','renderer','dirt_strength','Dirt look strength (%)',0,200,135,'How strongly worked dirt is shaded.'),
-  @('renderer','renderer','dirt_fade_end','Dirt look distance (m)',10,60,60,'Distance where the dirt shading fades out (max 60).')
+  @('renderer','renderer','dirt_fade_end','Dirt look distance (m)',10,100,100,'Distance where the dirt shading fades out (max 100).')
 )
 $Chk=@(
   @('renderer','renderer','dirt_material','Dirt shading (ruts, damp dirt, soft layer)',1),

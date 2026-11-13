@@ -202,7 +202,7 @@ MX Bikes saves only the track's heights. The mod saves the rest of the soil with
 - Sharper rut walls and lighting, with shadows cast by the ruts.
 - Damp rut bottoms, dry crests, packed shiny lines and loose crumbly dirt.
 - Roost clods, and the soft dirt layer with its tyre marks.
-- It fades out with distance (60 m by default) and leaves grass alone.
+- It fades out with distance (100 m by default; the tyre trenches of the soft layer show to about 30 m) and leaves grass alone.
 
 ### 6. Engine fixes
 While a track is loaded, the mod applies three small, guarded fixes to MX Bikes' terrain code in memory, and removes them when you leave the track:
@@ -318,7 +318,7 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `dirt_material` | 1 | The dirt shading pass. |
 | `dirt_strength` | 135 | Strength of the shading, 0–200 %. |
 | `dirt_loose` | 55 | Fine loose grain on worked ground, 0–100 %. |
-| `dirt_fade_start` / `dirt_fade_end` | 45 / 60 | Distance (m) where the look fades out; the end is 60 at most. |
+| `dirt_fade_start` / `dirt_fade_end` | 75 / 100 | Distance (m) where the look fades out; the end is 100 at most (the dirt is drawn about 95 m ahead, 65 m to the sides). A file that still has the old 45 / 60 is read as 75 / 100. |
 | `soft_layer` | 1 | Draw the soft dirt layer. |
 | `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
 | `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |
@@ -438,7 +438,7 @@ MX Bikes loads every `.dlo` in its `plugins` folder through its plugin API. This
 
 **Render: `mx_dirt_render.dlo`**
 - Hooks the terrain draw.
-- Right after MX Bikes draws the ground, it draws one extra pass over a ~70 m window around the camera, using the game's own camera and sun:
+- Right after MX Bikes draws the ground, it draws one extra pass over a ~140 m window around the camera (about 95 m ahead, 65 m to the sides on a 550 m track), using the game's own camera and sun. The window scrolls with the camera: only the rows and columns that enter it, and what changed, are read and uploaded:
   - it reads the native colour that was just drawn
   - it reads the current and original heights, and the simulation state
   - it reads the soft layer: a 51 m window, uploaded tile by tile as it changes
@@ -458,7 +458,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.5.1   # both + the release zip in build\
+.\package.ps1 -Version 1.6.0   # both + the release zip in build\
 ```
 
 Source layout:

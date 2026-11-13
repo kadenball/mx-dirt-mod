@@ -23,24 +23,50 @@
    print band drawn from the sim's print arrays was removed in 1.5.1 - it cost
    frame time and could not be told apart from the soft layer's own marks.)
    Green (grass) pixels are mostly left alone. Fades out by dirt_fade_start..
-   dirt_fade_end and at the window edge. Depth/alpha are never written. */
+   dirt_fade_end and at the window edge. Depth/alpha are never written.
+   The height and state textures are toroidal (mxdirt_dirt.h): window texel c is
+   read at (c+shift)/SIDE through a repeating sampler.
+   The fragment source is compiled twice: as is (the colour draw) and with SINK
+   defined (the depth-only tyre-sink draw: the soft layer march, nothing else).
+   perf: the colour program never mentions gl_FragDepth, so hidden fragments
+   (ground behind a jump, behind a bike or a building) are rejected by the
+   depth test before the shader runs. */
+#ifndef MXDIRT_SOFT_FADE_AREA
+#define MXDIRT_SOFT_FADE_AREA 1
+#endif
+#ifndef MXDIRT_SOFT_FADE_START
+#define MXDIRT_SOFT_FADE_START 2.2
+#endif
+#ifndef MXDIRT_SOFT_FADE_END
+#define MXDIRT_SOFT_FADE_END 8.
+#endif
+#ifndef MXDIRT_EDGE_FADE
+#define MXDIRT_EDGE_FADE 8.
+#endif
+#define MXDIRT_STR_(x) #x
+#define MXDIRT_STR(x) MXDIRT_STR_(x)
 static const char mxdirt_vertex_shader[]=
  "#version 330 compatibility\n"
  "layout(location=0) in vec2 cell;"
- "uniform sampler2D heights;uniform mat4 view,projection;uniform vec3 texel0,camera;uniform vec2 spacing;uniform float height_scale;"
+ "uniform sampler2D heights;uniform mat4 view,projection;uniform vec3 texel0,camera;uniform vec2 spacing,shift;uniform float height_scale;"
  "out vec2 gv;out vec3 wv;"
- "void main(){ivec2 t=ivec2(cell)+ivec2(2);float h=texelFetch(heights,t,0).r*height_scale;"
+ "void main(){ivec2 t=ivec2(cell)+ivec2(" MXDIRT_STR(MXDIRT_MARGIN) ");float h=texelFetch(heights,(t+ivec2(shift))%ivec2(" MXDIRT_STR(MXDIRT_SIDE) "),0).r*height_scale;"
  "vec3 p=vec3(texel0.x+float(t.x)*spacing.x,texel0.y+h,texel0.z+float(t.y)*spacing.y);"
  "p.y+=.004+.001*distance(p,camera);gv=vec2(t)+.5;wv=p;gl_Position=projection*view*vec4(p,1);}";
-static const char mxdirt_fragment_shader[]=
- "#version 330 compatibility\n"
+static const char mxdirt_fragment_version[]="#version 330 compatibility\n";
+static const char mxdirt_fragment_sink[]="#define SINK 1\n";
+static const char mxdirt_fragment_body[]=
  "uniform sampler2D heights,background,clods;uniform ivec2 viewport_origin;uniform mat4 view,projection;uniform vec3 texel0;"
- "uniform vec2 spacing,fade;uniform vec4 bounds;uniform vec3 camera;uniform float height_scale,strength,base_grain;"
+ "uniform vec2 spacing,fade,shift;uniform vec4 bounds;uniform vec3 camera;uniform float height_scale,strength,base_grain;"
  "uniform sampler2D state;uniform int state_on;"
  "uniform sampler2D soft;uniform int soft_on,soft_mode;uniform vec2 soft_origin;uniform vec4 soft_window;uniform float soft_cell,soft_depth,soft_unit;"
+ /* perf: one texel per soft tile slot (64x64, wraps like the window): 0 = no soft texel within one tile
+    (soft_tile metres) of any point of this tile was ever touched. There the layer is flat at its rest
+    height and none of its ~30 samples per pixel are taken; the result is the same. */
+ "uniform sampler2D soft_occ;uniform float soft_tile;"
  "in vec2 gv;in vec3 wv;layout(location=0) out vec4 color;"
- "const float SIDE=261.;"
- "vec2 H(vec2 c){return texture(heights,c/SIDE).rg*height_scale;}"
+ "const float SIDE=float(" MXDIRT_STR(MXDIRT_SIDE) ");"
+ "vec2 H(vec2 c){return texture(heights,(c+shift)/SIDE).rg*height_scale;}"
  /* soft top layer height (m, relative to the untouched layer top) at a local point; the window wraps every 2048 texels */
  "float SH(vec2 l){return (texture(soft,l/(soft_cell*2048.)).r*255.-128.)*soft_unit;}"
  /* knob blocks of a tread pressed along f: rows every 5.2 cm, 3 cm blocks across, staggered */
@@ -50,12 +76,12 @@ static const char mxdirt_fragment_shader[]=
  /* integer hash -> 3 uniform values per lattice cell (stable in world space) */
  "vec3 rnd(vec2 id){uvec2 q=uvec2(ivec2(id)+ivec2(1048576));uint h=(q.x*1597334677u)^(q.y*3812015801u);h^=h>>16;h*=2246822519u;h^=h>>13;h*=3266489917u;h^=h>>16;"
  "return vec3(uvec3(h,h>>11,h>>22)&uvec3(2047u,2047u,1023u))/vec3(2047.,2047.,1023.);}"
- "void main(){vec2 g=gv;vec3 w=wv;gl_FragDepth=gl_FragCoord.z;"
+ "void main(){vec2 g=gv;vec3 w=wv;"
  /* metres of ground per pixel: every procedural layer fades out before it aliases */
  "vec2 p=w.xz,dpx=dFdx(p),dpy=dFdy(p);float px=max(length(dpx),length(dpy));"
  "float dist=distance(w,camera);"
  "float edge=min(min(w.x-bounds.x,bounds.z-w.x),min(w.z-bounds.y,bounds.w-w.z));"
- "float amount=(1.-smoothstep(fade.x,fade.y,dist))*smoothstep(0.,3.,edge)*strength;"
+ "float amount=(1.-smoothstep(fade.x,fade.y,dist))*smoothstep(0.," MXDIRT_STR(MXDIRT_EDGE_FADE) ",edge)*strength;"
  "if(amount<=.003)discard;"
  "ivec2 pix=ivec2(gl_FragCoord.xy)-viewport_origin;"
  /* Soft top layer, first: the view ray is marched down through it (parallax). The layer lies ON the ridden
@@ -66,20 +92,36 @@ static const char mxdirt_fragment_shader[]=
     state) is taken at THAT ground point. The relief then carries the ground with it like real
     displaced dirt; lit on the texture of the mesh point behind it, it read as a translucent sheet floating
     over the ground.
-    soft_mode bit 2 - depth-only draw: only where the layer stands above the mesh, at the depth of its
-    surface, so the bike drawn afterwards sinks into the loose soil instead of standing on top of it. */
+    SINK - depth-only draw: only where the layer stands above the mesh, at the depth of its
+    surface, so the bike drawn afterwards sinks into the loose soil instead of standing on top of it.
+    The march reads the layer between its top and its rest height along the view ray: if the tile
+    around the middle of that stretch is clear in soft_occ, the ray meets the flat layer at so. */
  "float s_vis=0.,s_up=0.;vec2 s_q=vec2(0.);"
  "if(soft_on!=0){vec2 sl=p-soft_origin;float se=min(min(sl.x-soft_window.x,soft_window.z-sl.x),min(sl.y-soft_window.y,soft_window.w-sl.y));"
- "s_vis=smoothstep(.5,3.,se)*(1.-smoothstep(soft_cell*1.2,soft_cell*5.,px));s_q=sl;"
+ /* The relief fades out with the ground a pixel covers. Its trenches run along the riding line, so at riding
+    distance a pixel is long ALONG them and still narrow ACROSS them: the fade goes by the square root of the
+    pixel's ground area (MXDIRT_SOFT_FADE cells: start,end), not by its longest side, which hid the relief
+    6-13 m ahead of a chase camera - close enough to watch it appear. */
+ "s_vis=smoothstep(.5,3.,se)*(1.-smoothstep(soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_START) ",soft_cell*" MXDIRT_STR(MXDIRT_SOFT_FADE_END) ","
+#if MXDIRT_SOFT_FADE_AREA
+  "sqrt(abs(dpx.x*dpy.y-dpx.y*dpy.x))"
+#else
+  "px"
+#endif
+ "));s_q=sl;"
  "if(s_vis>.01){vec3 Vs=normalize(camera-w);vec2 dv=Vs.xz/max(Vs.y,.2);float so=.6*soft_depth,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
- "float yp=top,hp=SH(sl+dv*top)+so,yh=bot;"
- "for(int i=1;i<=16;i++){float y=mix(top,bot,float(i)/16.),h=SH(sl+dv*y)+so;if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}"
+ "float yh=so;"
+ "if(texelFetch(soft_occ,ivec2(floor((sl+dv*(.5*(top+so)-(top-bot)/32.))/soft_tile))&ivec2(63),0).r>0.){"
+ "float yp=top,hp=SH(sl+dv*top)+so;yh=bot;"
+ "for(int i=1;i<=16;i++){float y=mix(top,bot,float(i)/16.),h=SH(sl+dv*y)+so;if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}}"
  "s_up=yh*s_vis;vec2 sh=dv*s_up;s_q=sl+sh;"
- "if((soft_mode&4)!=0){if(s_up<.004)discard;vec4 c=projection*view*vec4(w+Vs*(s_up/max(Vs.y,.2)),1.);gl_FragDepth=clamp(c.z/max(c.w,1e-4)*.5+.5,0.,1.);color=vec4(0.);return;}"
+ "\n#ifdef SINK\n"
+ "if(s_up<.004)discard;vec4 c=projection*view*vec4(w+Vs*(s_up/max(Vs.y,.2)),1.);gl_FragDepth=clamp(c.z/max(c.w,1e-4)*.5+.5,0.,1.);color=vec4(0.);return;}}"
+ "discard;}"
+ "\n#else\n"
  "if((soft_mode&1)!=0){g+=sh/spacing;w.xz+=sh;p=w.xz;"
- "float hy=texture(heights,g/SIDE).r*height_scale;vec4 c=projection*view*vec4(p.x,texel0.y+hy+.004,p.y,1.);"
+ "float hy=texture(heights,(g+shift)/SIDE).r*height_scale;vec4 c=projection*view*vec4(p.x,texel0.y+hy+.004,p.y,1.);"
  "if(c.w>.05){vec2 n=c.xy/c.w;if(abs(n.x)<.999&&abs(n.y)<.999)pix=ivec2((n*.5+.5)*vec2(textureSize(background,0)));}}}}"
- "if((soft_mode&4)!=0)discard;"
  "vec3 native=texelFetch(background,pix,0).rgb;"
  "float lum0=dot(native,vec3(.299,.587,.114));"
  "float green=clamp((native.g-max(native.r,native.b))/max(lum0,.02)*4.,0.,1.);"
@@ -102,7 +144,7 @@ static const char mxdirt_fragment_shader[]=
  "float raised=smoothstep(.004,.04,dd),dug=smoothstep(.004,.05,-dd),rough=smoothstep(.012,.06,abs(dlap));"
  /* soil state: the dirt sim's own per-texel state, else height-only defaults */
  "float s_pack=0.,s_loose=0.,wet=.35,s_clod=0.;"
- "if(state_on!=0){vec4 q=texture(state,g/SIDE);s_pack=q.r;s_loose=q.g;wet=q.b;s_clod=q.a;}"
+ "if(state_on!=0){vec4 q=texture(state,(g+shift)/SIDE);s_pack=q.r;s_loose=q.g;wet=q.b;s_clod=q.a;}"
  "float scuff=smoothstep(.0008,.006,abs(dd))*(1.-smoothstep(.008,.025,abs(dd)));"
  /* with the sim state the mm-scale scuff fringe is not needed to find worked
     ground; keeping it small keeps rut edges crisp instead of fuzzy */
@@ -156,7 +198,8 @@ static const char mxdirt_fragment_shader[]=
     Untouched layer: the native gravel grain softened into fine loose crumbs. */
  "float s_h=0.,s_press=0.,s_lip=0.,s_shade=1.,s_cav=0.,s_lay=0.,s_new=0.;"
  "if(soft_on!=0){s_lay=1.-green;"
- "if(s_vis>.01){"
+ /* everything read below lies within one tile of the middle of the sun-shadow stretch: clear there = flat, untouched layer */
+ "if(s_vis>.01&&texelFetch(soft_occ,ivec2(floor((s_q+L.xz/max(L.y,.12)*.044)/soft_tile))&ivec2(63),0).r>0.){"
  "vec2 q=s_q;float c=soft_cell;s_h=SH(q);"
  "vec2 sg=vec2(SH(q+vec2(c,0))-SH(q-vec2(c,0)),SH(q+vec2(0,c))-SH(q-vec2(0,c)))/(2.*c);"
  "s_cav=(SH(q+vec2(2.5*c,0))+SH(q-vec2(2.5*c,0))+SH(q+vec2(0,2.5*c))+SH(q-vec2(0,2.5*c)))*.25-s_h;"
@@ -186,7 +229,7 @@ static const char mxdirt_fragment_shader[]=
  "vec2 ci=floor(p/.11),sh=L.xz/max(L.y,.3);"
  "for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){"
  "vec2 id=ci+vec2(i,j);vec3 r=rnd(id);vec2 cw=(id+.15+.7*r.xy)*.11;"
- "if(.001+.999*r.z>textureLod(state,(g+(cw-p)/spacing)/SIDE,0.).a*1.15)continue;"
+ "if(.001+.999*r.z>textureLod(state,(g+(cw-p)/spacing+shift)/SIDE,0.).a*1.15)continue;"
  "float rad=(.012+.026*fract(r.x*7.31+r.y*3.17))*(.8+.45*damp);vec2 d=p-cw;float t=length(d)/rad;"
  "if(t<1.){float hgt=sqrt(1.-t*t);if(hgt>lump){lump=hgt;lslope=-d/(rad*max(hgt,.25));}}"
  "lshade=min(lshade,mix(.6,1.,smoothstep(.5,1.05,length(p-(cw-sh*rad*.8))/(rad*1.1))));}"
@@ -219,5 +262,6 @@ static const char mxdirt_fragment_shader[]=
  "vec3 sunc=gl_LightSource[0].diffuse.rgb;if(dot(sunc,vec3(1))<.05)sunc=vec3(1);sunc=min(sunc,vec3(1.5));"
  "float sshade=mix(1.,s_shade,s_vis);"
  "vec3 lit=soilc*relight*ao*crevice*shade*lshade*sshade+sunc*spec*shade*sshade;"
- "color=vec4(clamp(mix(native,lit,amount*(1.-.85*green)),0.,1.),1.);}";
+ "color=vec4(clamp(mix(native,lit,amount*(1.-.85*green)),0.,1.),1.);}"
+ "\n#endif\n";
 #endif

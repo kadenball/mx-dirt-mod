@@ -34,12 +34,23 @@ static void ra_ghost_record_frame(float dt){
   live[w].t=ra_rec_t;if(mxb_dirt_ghost_sample_ok(live+w))ra_rec[ra_rec_n++]=live[w];
  }
 }
+/* A lap file (1-1.5 MB) is written by a worker thread: written inside RunLap it held the game's thread at
+   the finish line. The writer owns the samples it was handed, writes <name>.tmp and renames it (a half-written
+   file is never listed), and is joined before the next one starts, before the folder is listed and at Shutdown. */
+typedef struct {char path[MAX_PATH];MxbDirtGhostHeader h;MxbDirtGhostSample *s;} RaLapJob;
+static HANDLE ra_lap_thread;
+static DWORD WINAPI ra_lap_writer(void *arg){
+ RaLapJob *j=arg;char tmp[MAX_PATH+8];
+ if(snprintf(tmp,sizeof(tmp),"%s.tmp",j->path)<(int)sizeof(tmp)&&mxb_dirt_ghost_write(tmp,&j->h,j->s)&&!MoveFileExA(tmp,j->path,MOVEFILE_REPLACE_EXISTING))DeleteFileA(tmp);
+ free(j->s);free(j);return 0;
+}
+static void ra_lap_join(void){if(ra_lap_thread){WaitForSingleObject(ra_lap_thread,INFINITE);CloseHandle(ra_lap_thread);ra_lap_thread=NULL;}}
 /* MX Bikes plugin API lap record (SPluginsBikeLap_t). */
 typedef struct {int lap_num,invalid,lap_time_ms,best;} RaLap;
 API void RunLap(void *data,int size){
  if(GetCurrentThreadId()!=ra_owner||!data||size<(int)sizeof(RaLap))return;
  RaLap lap;memcpy(&lap,data,sizeof(lap));
- int saved=0;char path[MAX_PATH]="";
+ int saved=0,async=0;char path[MAX_PATH]="";
  if(ra_record_ghosts&&!lap.invalid&&lap.lap_time_ms>10000&&lap.lap_time_ms<3600000&&!ra_rec_overflow&&ra_rec_n>=200&&
     ra_rec_t>.5f*lap.lap_time_ms/1000.f){
   char dir[MAX_PATH];SYSTEMTIME st;GetLocalTime(&st);
@@ -48,11 +59,16 @@ API void RunLap(void *data,int size){
    MxbDirtGhostHeader h;memset(&h,0,sizeof(h));h.magic=MXB_DIRT_GHOST_MAGIC;h.version=MXB_DIRT_GHOST_VERSION;
    h.sample_bytes=sizeof(MxbDirtGhostSample);h.samples=ra_rec_n;h.lap_ms=lap.lap_time_ms;h.lap_num=lap.lap_num;
    strncpy(h.track,ra_event_track,sizeof(h.track)-1);strncpy(h.bike,ra_ghost_bike,sizeof(h.bike)-1);
-   saved=mxb_dirt_ghost_write(path,&h,ra_rec);
+   /* the samples go to the writer and the next lap records into a fresh buffer; without one, written here as before */
+   RaLapJob *job=malloc(sizeof(*job));MxbDirtGhostSample *fresh=job?malloc((size_t)ra_rec_cap*sizeof(*fresh)):NULL;
+   if(job&&fresh){ra_lap_join();memcpy(job->path,path,sizeof(job->path));job->h=h;job->s=ra_rec;
+    ra_lap_thread=CreateThread(NULL,0,ra_lap_writer,job,CREATE_SUSPENDED,NULL);
+    if(ra_lap_thread){ra_rec=fresh;saved=async=1;SetThreadPriority(ra_lap_thread,THREAD_PRIORITY_BELOW_NORMAL);ResumeThread(ra_lap_thread);}}
+   if(!async){free(fresh);free(job);saved=mxb_dirt_ghost_write(path,&h,ra_rec);}
   }
  }
- if(ra_log){fprintf(ra_log,"{\"kind\":\"lap_recording\",\"lap\":%d,\"invalid\":%d,\"lap_ms\":%d,\"samples\":%u,\"recorded_s\":%.2f,\"overflow\":%d,\"saved\":%d}\n",
-  lap.lap_num,lap.invalid,lap.lap_time_ms,ra_rec_n,(double)ra_rec_t,ra_rec_overflow,saved);fflush(ra_log);}
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"lap_recording\",\"lap\":%d,\"invalid\":%d,\"lap_ms\":%d,\"samples\":%u,\"recorded_s\":%.2f,\"overflow\":%d,\"saved\":%d,\"async\":%d}\n",
+  lap.lap_num,lap.invalid,lap.lap_time_ms,ra_rec_n,(double)ra_rec_t,ra_rec_overflow,saved,async);fflush(ra_log);}
  ra_ghost_recording_reset();
 }
 /* Up to 64 .dghost names of one folder, sorted (zero-padded lap time first =
@@ -68,7 +84,7 @@ static unsigned ra_lap_list(const char *dir,char names[64][MAX_PATH]){
    the pre-wear gate, then kept as live ghost riders if ghost_riders>0. */
 static char ra_lap_names[64][MAX_PATH];
 static void ra_ghost_load(void){
- ra_ghost_recording_reset();
+ ra_ghost_recording_reset();ra_lap_join(); /* a lap still being written must be in the folder before it is listed */
  if((!ra_ghost_riders&&!ra_prewear_riders)||!ra_session)return;
  char dir[MAX_PATH];unsigned count=0;const char *source=RA_LAPS_DIR;
  if(ra_lap_dir(RA_LAPS_DIR,dir,sizeof(dir),0))count=ra_lap_list(dir,ra_lap_names);

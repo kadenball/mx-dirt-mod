@@ -49,7 +49,9 @@ int mxdirt_height_field_convert(MxdirtHeightField *,uint64_t generation,
    detected here. Only sampled texels are validated; failure leaves cached
    output/target/stats unchanged so the same complete tile union can be retried.
    Output is still the complete absolute desired grid. Stats count the
-   recomputed subset. Serialized owner only. */
+   recomputed subset. Serialized owner only.
+   Inside a marked tile only the texels that differ from the source last converted
+   are recomputed (a marked tile with no changed texel costs one compare). */
 int mxdirt_height_field_convert_changed_tiles(MxdirtHeightField *,uint64_t generation,
     const float *source,size_t source_count,const unsigned char *tiles,size_t tile_count,
     int32_t *target,size_t target_count,MxdirtHeightStats *stats);

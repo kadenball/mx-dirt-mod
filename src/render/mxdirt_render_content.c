@@ -5,6 +5,7 @@
 #include "mxdirt_render_content.h"
 #include "mxdirt_dirt_gl.h"
 #include "mxdirt_frame.h"
+#include "mxdirt_fast_read.h"
 #include <GL/gl.h>
 #include <math.h>
 #include <stdarg.h>
@@ -18,6 +19,9 @@ static int rc_dirt,rc_dirt_fault,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_
 static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;
 static uint64_t rc_serial,rc_peak,rc_ticks,rc_recentres,rc_frames,rc_skips,rc_generation;
 static int rc_state_live;static MxDirtStats rc_stats;
+/* Measurement only (log): the longest gap between two drawn frames of the window and how many were over 20 / 33 ms,
+   the GPU time of the pass (sampled), where the camera is; a gap over 40 ms also gets a line of its own. */
+static uint64_t rc_last_draw,rc_gap_peak;static unsigned rc_gap20,rc_gap33,rc_hitches,rc_gpu_n;static double rc_gpu_sum,rc_gpu_peak;static float rc_cam[3];static int rc_recentred;
 static MxDirtTsTerrain rc_bound;
 static MxDirtBorrowFrameFn rc_borrow;
 static FILE *rc_log;static unsigned rc_lines;
@@ -38,15 +42,10 @@ static DWORD game_path(wchar_t *path,DWORD n,size_t cap){
  if((size_t)d+n>=cap-1)return 0;
  wmemmove(path+d,path,(size_t)n+1);wmemcpy(path,dir,d);return d+n;
 }
-static int rc_read(uintptr_t p,void *out,size_t n){
- if(!p||!n||n>UINTPTR_MAX-p)return 0;uintptr_t end=p+n;
- for(uintptr_t at=p;at<end;){MEMORY_BASIC_INFORMATION m;
-  if(!VirtualQuery((void*)at,&m,sizeof(m))||m.State!=MEM_COMMIT||(m.Protect&(PAGE_GUARD|PAGE_NOACCESS))||
-   !(m.Protect&(PAGE_READONLY|PAGE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY)))return 0;
-  uintptr_t next=(uintptr_t)m.BaseAddress+m.RegionSize;if(next<=at)return 0;at=next<end?next:end;
- }
- SIZE_T got=0;return ReadProcessMemory(GetCurrentProcess(),(void*)p,out,n,&got)&&got==n;
-}
+/* Native memory reads: checked once, remembered for MXD_FR_FRAMES frames, then plain
+   copies (mxdirt_fast_read.h). Owner thread only. */
+static MxdFastRead rc_reads;
+static int rc_read(uintptr_t p,void *out,size_t n){return mxd_fr_read(&rc_reads,p,out,n);}
 /* The core is optional and may load after us: look it up lazily. It is pinned
    once found so the borrowed export can never unload under us. */
 static int rc_resolve(void){
@@ -72,11 +71,13 @@ int mxdirt_content_startup(const wchar_t *ini){
  rc_thread=GetCurrentThreadId();{LARGE_INTEGER f;if(QueryPerformanceFrequency(&f)&&f.QuadPart>0)rc_ms_per_tick=1000./(double)f.QuadPart;}
  if(GetPrivateProfileIntW(L"renderer",L"enabled",0,ini)!=1)goto end;
  UINT dirt=GetPrivateProfileIntW(L"renderer",L"dirt_material",1,ini),strength=GetPrivateProfileIntW(L"renderer",L"dirt_strength",135,ini),loose=GetPrivateProfileIntW(L"renderer",L"dirt_loose",55,ini);
- UINT fade_start=GetPrivateProfileIntW(L"renderer",L"dirt_fade_start",45,ini),fade_end=GetPrivateProfileIntW(L"renderer",L"dirt_fade_end",60,ini);
+ UINT fade_start=GetPrivateProfileIntW(L"renderer",L"dirt_fade_start",75,ini),fade_end=GetPrivateProfileIntW(L"renderer",L"dirt_fade_end",100,ini);
+ /* 45..60 was the default and the most the smaller window of 1.5 could show: a settings file that still says so gets today's default */
+ if(fade_start==45&&fade_end==60){fade_start=75;fade_end=100;}
  rc_soft=GetPrivateProfileIntW(L"renderer",L"soft_layer",1,ini)!=0;
  rc_soft_solid=GetPrivateProfileIntW(L"renderer",L"soft_solid",1,ini)!=0;rc_tyre_sink=GetPrivateProfileIntW(L"renderer",L"tyre_sink",1,ini)!=0;
  /* An invalid dirt key disables only this pass, never the renderer. */
- rc_dirt=dirt==1&&strength<=200&&loose<=100&&fade_start<fade_end&&fade_end<=60;
+ rc_dirt=dirt==1&&strength<=200&&loose<=100&&fade_start<fade_end&&fade_end<=100;
  rc_look.strength=(float)strength/100.f;rc_look.base_loose=(float)loose/100.f;rc_look.fade_start=(float)fade_start;rc_look.fade_end=(float)fade_end;
  wchar_t log[32768];DWORD n=GetPrivateProfileStringW(L"renderer",L"content_log",L"plugins\\mx_dirt_render.log",log,32768,ini);
  n=game_path(log,n,32768);
@@ -117,6 +118,13 @@ static int rc_grid_read(void *user,uintptr_t address,void *out,size_t bytes){
  for(unsigned k=0;k<2;k++)if(address>=r->first[k]&&address<=r->last[k]&&bytes<=r->last[k]-address)return rc_read(address,out,bytes);
  return 0;
 }
+/* The same bounded spans, looked at in place instead of copied out. */
+static const void *rc_grid_view(void *user,uintptr_t address,size_t bytes){
+ RcReader *r=user;if(!r||!bytes||bytes>(size_t)64<<20)return NULL;
+ for(unsigned k=0;k<2;k++)if(address>=r->first[k]&&address<=r->last[k]&&bytes<=r->last[k]-address)
+  return mxd_fr_check(&rc_reads,address,bytes)?(const void*)address:NULL;
+ return NULL;
+}
 static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,const MxDirtTsTerrain *terrain){
  rc_ticks=0;memset(&rc_stats,0,sizeof(rc_stats));if(!rc_dirt||rc_dirt_fault||scope->serial<=rc_serial)return 0;
  size_t grid_bytes=(size_t)terrain->width*terrain->height*2;
@@ -124,11 +132,12 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
  RcReader reader={{terrain->render_grid,terrain->base_grid},{terrain->render_grid+grid_bytes,terrain->base_grid+grid_bytes}};
  MxDirtInput in;memset(&in,0,sizeof(in));memcpy(in.modelview,scope->modelview,sizeof(in.modelview));in.current_grid=terrain->render_grid;in.base_grid=terrain->base_grid;
  in.width=terrain->width;in.height=terrain->height;in.extent_x=terrain->extent_x;in.extent_z=terrain->extent_z;in.height_scale=terrain->height_scale;
- memcpy(in.origin,terrain->origin,sizeof(in.origin));in.read=rc_grid_read;in.read_user=&reader;
+ memcpy(in.origin,terrain->origin,sizeof(in.origin));in.read=rc_grid_read;in.view=rc_grid_view;in.read_user=&reader;
  if(!rc_cpu)rc_cpu=mxdirt_create();if(!rc_cpu)return 0;rc_serial=scope->serial;
  uint64_t start=rc_stamp();MxDirtWindow window;
  if(!mxdirt_update(rc_cpu,&in,&window,&rc_stats)){rc_ticks=rc_elapsed(start);return 0;}
  if(window.recentered)rc_recentres++;
+ memcpy(rc_cam,window.camera,sizeof(rc_cam));rc_recentred=window.recentered!=0;
  /* Identity brackets the sparse reads. */
  if(!rc_identity(terrain,frame)){rc_ticks=rc_elapsed(start);return 0;}
  if(!rc_gl){if(!mxdirt_gl_create(&rc_gl,frame->generation)){int stage=0,major=0,profile=0;mxdirt_gl_last_failure(&stage,&major,&profile);
@@ -153,6 +162,7 @@ int mxdirt_content_draw(const MxDirtCameraScope *scope,const MxDirtTsTerrain *te
  if(!rc_started||!rc_live||rc_fault||GetCurrentThreadId()!=rc_thread||!scope||!terrain||scope->thread!=rc_thread||
     !scope->context||scope->context!=wglGetCurrentContext()||!scope->complete||!scope->serial)goto end;
  if(!rc_cleanup()||!rc_frame(&frame)||frame.generation!=scope->generation){if(rc_skips++<4)mxdirt_content_note("dirt_waiting core_frame=0");goto end;}
+ if(rc_frames%MXD_FR_FRAMES==0)mxd_fr_expire(&rc_reads);
  uint64_t t=rc_stamp();
  int identity=rc_identity(terrain,&frame)&&!(rc_generation&&(rc_generation!=frame.generation||!rc_same(&rc_bound,terrain)));
  uint64_t identity_ticks=rc_elapsed(t);
@@ -162,18 +172,28 @@ int mxdirt_content_draw(const MxDirtCameraScope *scope,const MxDirtTsTerrain *te
    terrain->width,terrain->height,(double)terrain->extent_x,(double)terrain->extent_z,(double)terrain->origin[0],(double)terrain->origin[1],(double)terrain->origin[2],terrain->flags);
   goto end;}
  if(!rc_generation){rc_bound=*terrain;rc_generation=frame.generation;}
+ /* the gap that ended here; rc_ticks, rc_stats and rc_cam still describe the frame before it */
+ {uint64_t gap=rc_last_draw&&began>rc_last_draw?began-rc_last_draw:0;rc_last_draw=began;double gap_ms=gap*rc_ms_per_tick;
+  if(rc_frames>8){if(gap>rc_gap_peak)rc_gap_peak=gap;if(gap_ms>20.)rc_gap20++;if(gap_ms>33.)rc_gap33++;
+   if(gap_ms>40.&&rc_hitches<400){rc_hitches++;mxdirt_content_note("hitch after_frame=%llu gap_ms=%.1f prev_dirt_ms=%.3f prev_recentred=%d prev_changed=%u sim_steps=%llu cam=%.0f,%.0f",
+    (unsigned long long)rc_frames,gap_ms,rc_ticks*rc_ms_per_tick,rc_recentred,rc_stats.changed,(unsigned long long)frame.sim_steps,(double)rc_cam[0],(double)rc_cam[2]);}}}
  int dirt_result=rc_draw_dirt(&frame,scope,terrain);
  rc_frames++;result=dirt_result>0?1:dirt_result;
+ {double g=0;if(rc_gl&&mxdirt_gl_gpu(rc_gl,&g,NULL,NULL)){rc_gpu_sum+=g;rc_gpu_n++;if(g>rc_gpu_peak)rc_gpu_peak=g;}}
  if(rc_frames<=8||rc_frames%120==0){
-  mxdirt_content_note("dirt frame=%llu generation=%llu serial=%llu soft=%d sim_state=%d sim_steps=%llu result=%d stage=%u reads=%u read_bytes=%u changed=%u recentres=%llu identity_ms=%.3f dirt_ms=%.3f dirt_max_ms=%.3f content_ms=%.3f",
+  int fbo=0,samples=0,skip=0,vw=0,vh=0;mxdirt_gl_target(rc_gl,&fbo,&samples,&skip);mxdirt_gl_gpu(rc_gl,NULL,&vw,&vh);
+  mxdirt_content_note("dirt frame=%llu generation=%llu serial=%llu soft=%d sim_state=%d sim_steps=%llu result=%d stage=%u reads=%u read_bytes=%u changed=%u recentres=%llu identity_ms=%.3f dirt_ms=%.3f dirt_max_ms=%.3f content_ms=%.3f fbo=%d samples=%d skip=%d gap_max_ms=%.1f gap20=%u gap33=%u gpu_ms=%.3f gpu_max_ms=%.3f gpu_n=%u cam=%.0f,%.0f vp=%dx%d",
    (unsigned long long)rc_frames,(unsigned long long)frame.generation,(unsigned long long)scope->serial,rc_soft_live,rc_state_live,(unsigned long long)frame.sim_steps,dirt_result,rc_stats.stage,rc_stats.read_calls,rc_stats.read_bytes,rc_stats.changed,
-   (unsigned long long)rc_recentres,identity_ticks*rc_ms_per_tick,rc_ticks*rc_ms_per_tick,rc_peak*rc_ms_per_tick,rc_elapsed(began)*rc_ms_per_tick);rc_peak=0;}
+   (unsigned long long)rc_recentres,identity_ticks*rc_ms_per_tick,rc_ticks*rc_ms_per_tick,rc_peak*rc_ms_per_tick,rc_elapsed(began)*rc_ms_per_tick,fbo,samples,skip,
+   rc_gap_peak*rc_ms_per_tick,rc_gap20,rc_gap33,rc_gpu_n?rc_gpu_sum/rc_gpu_n:0.,rc_gpu_peak,rc_gpu_n,(double)rc_cam[0],(double)rc_cam[2],vw,vh);
+  rc_peak=0;rc_gap_peak=0;rc_gap20=rc_gap33=rc_gpu_n=0;rc_gpu_sum=rc_gpu_peak=0;}
 end:SetLastError(error);return result;
 }
 void mxdirt_content_lifecycle(uint32_t event,uint64_t generation){
  DWORD error=GetLastError();if(!rc_started||GetCurrentThreadId()!=rc_thread)goto end;
+ mxd_fr_expire(&rc_reads);
  mxdirt_content_note("lifecycle event=%u generation=%llu",event,(unsigned long long)generation);
- if(event==MXDIRT_EVENT_BEGIN){rc_live=1;rc_fault=0;rc_frames=rc_skips=rc_recentres=0;rc_peak=0;if(rc_generation||rc_cpu||rc_gl)rc_retire=1;(void)rc_cleanup();}
+ if(event==MXDIRT_EVENT_BEGIN){rc_live=1;rc_fault=0;rc_frames=rc_skips=rc_recentres=0;rc_peak=0;rc_last_draw=0;rc_hitches=0;if(rc_generation||rc_cpu||rc_gl)rc_retire=1;(void)rc_cleanup();}
  else if(event==MXDIRT_EVENT_RETIRE||event==MXDIRT_SHUTDOWN){rc_live=0;rc_retire=1;(void)rc_cleanup();}
  /* Pausing (RunStop) keeps history and event identity; no teardown. */
  if(event==MXDIRT_SHUTDOWN&&rc_log){fclose(rc_log);rc_log=NULL;}

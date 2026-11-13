@@ -23,6 +23,7 @@
 #include "mxdirt_camera.h"
 #include "mxdirt_render_content.h"
 #include "mxdirt_surface_patch.h"
+#include "mxdirt_fast_read.h"
 #define API __declspec(dllexport)
 #define NOINLINE __declspec(noinline)
 #define NATIVE_RETURN() __builtin_extract_return_addr(__builtin_return_address(0))
@@ -90,6 +91,10 @@ static int safe_copy(void *user,uintptr_t p,void *out,size_t n){
  (void)user;SIZE_T got=0;
  return readable(p,n)&&ReadProcessMemory(GetCurrentProcess(),(void*)p,out,n,&got)&&got==n;
 }
+/* Per-frame reads of the terrain descriptor handed to the native terrain draw:
+   checked once, then plain copies (mxdirt_fast_read.h). Render thread only. */
+static MxdFastRead frame_reads;static unsigned frame_reads_age;
+static int frame_copy(void *user,uintptr_t p,void *out,size_t n){(void)user;return mxd_fr_read(&frame_reads,p,out,n);}
 static int executable(void *p){
  MEMORY_BASIC_INFORMATION m;uintptr_t v=(uintptr_t)p;
  return v>65535&&v!=UINTPTR_MAX&&VirtualQuery(p,&m,sizeof(m))&&m.State==MEM_COMMIT&&
@@ -220,10 +225,12 @@ static int install_calls(void){
 /* Every frame proves our exact bytes/pointers are still in place. Loss of
    ownership disables the pass; a foreign owner is never superseded. */
 static int owned_all(void){
- unsigned char current[5];
- if(!call_owned||!safe_copy(NULL,plan.site,current,5)||memcmp(current,plan.patch,5)){InterlockedExchange(&foreign,1);mark(A_FOREIGN_CALL,0,0);return 0;}
- if(slots_ok)for(unsigned i=0;i<3;i++){void *now=NULL;
-  if(!safe_copy(NULL,(uintptr_t)image_base+slot_rva[i],&now,sizeof(now))||now!=(slot_owned[i]?gl_wrapper(i):slot_original[i])){
+ /* perf: the patch site and the slots lie inside the mapped mxbikes.exe image (both were read through
+    safe_copy when they were installed) and an image stays mapped for the life of the process, so these
+    are plain reads - they used to be 8 system-call reads per frame. */
+ if(!call_owned||memcmp((const void*)plan.site,plan.patch,5)){InterlockedExchange(&foreign,1);mark(A_FOREIGN_CALL,0,0);return 0;}
+ if(slots_ok)for(unsigned i=0;i<3;i++){void *now=*(void*volatile*)(image_base+slot_rva[i]);
+  if(now!=(slot_owned[i]?gl_wrapper(i):slot_original[i])){
    InterlockedExchange(&foreign,1);mark(A_FOREIGN_SLOT,i,(uintptr_t)now);return 0;}}
  return !atomic(&foreign);
 }
@@ -268,14 +275,14 @@ static int bind_generation(uint64_t current,HGLRC ctx,DWORD thread){
  if(render_context&&render_context!=ctx){generation_fault=1;mark(A_CONTEXT,(uintptr_t)ctx,(uintptr_t)render_context);return 0;}
  if(!generation){
   generation=current;render_thread=thread;render_context=ctx;
-  MxDirtTsConfig conf={safe_copy,NULL,generation,thread};
+  MxDirtTsConfig conf={frame_copy,NULL,generation,thread};
   if(!mxdirt_ts_init(&capture,&conf)){generation_fault=1;return 0;}
  }
  return 1;
 }
 /* First native terrain draw inside the outer terrain call: its matrices are the
    camera the ground was drawn with. Any other shape fails this frame. */
-static float proj_cache[16];static int proj_valid;static unsigned proj_age;
+static float proj_cache[16];static int proj_valid;static unsigned proj_age,undrawn;
 static void observe_gl(uint32_t path,void *ret,GLenum mode,GLsizei count,GLenum type){
  if(GetCurrentThreadId()!=render_thread||!capture.depth||content_busy)return;
  if(!camera_active||capture.depth!=1||capture.scope_count!=1){camera_failed=1;return;}
@@ -302,6 +309,7 @@ static NOINLINE int terrain_wrapper(void *h,void *m,void *v,const float *matrix,
   camera_failed=1;
  }else if(thread==lifecycle_thread&&capture_active()&&return_rva(ret)==TERRAIN_RETURN&&flags==0){
   HGLRC ctx=wglGetCurrentContext();uint64_t active=mxdirt_content_generation();
+  if(++frame_reads_age>=MXD_FR_FRAMES){mxd_fr_expire(&frame_reads);frame_reads_age=0;}
   if(ctx&&bind_generation(active,ctx,thread)&&owned_all()&&install_slots()&&mxdirt_ts_next_capture(&capture,thread)){
    token=mxdirt_ts_enter_terrain(&capture,generation,thread,MXDIRT_TS_TERRAIN_CALL,(uintptr_t)h,(uintptr_t)m,(uintptr_t)v,(uintptr_t)matrix,flags);
    if(token.serial){outer=1;memset(&camera,0,sizeof(camera));camera_active=1;camera_seen=camera_failed=0;
@@ -318,7 +326,9 @@ static NOINLINE int terrain_wrapper(void *h,void *m,void *v,const float *matrix,
   int drawn=0;
   if(eligible){content_busy=1;drawn=mxdirt_content_draw(&camera,&capture.scopes[0]);content_busy=0;}
   frames_attempted++;if(drawn>0)frames_drawn++;else if(drawn<0)frames_failed++;else frames_skipped++;
-  if(drawn<=0)proj_valid=0; /* re-read the camera from GL after any frame that did not draw */
+  /* Re-read the camera from GL after a frame that did not draw - but only for the first two in a row: a pass
+     that stays ruled out (see the hold in mxdirt_gl_draw) must not cost two glGet* on every frame. */
+  if(drawn>0)undrawn=0;else if(++undrawn<=2)proj_valid=0;
  }
  InterlockedIncrement64(&forwarded[0]);InterlockedDecrement(&inflight);settle();SetLastError(error);return result;
 }
@@ -396,7 +406,7 @@ API void EventInit(void *data,int size){
  RenderEvent e;
  if(!content_ready||!verified_image||!data||size<(int)sizeof(e)||atomic(&foreign)||!configuration()||
     !safe_copy(NULL,(uintptr_t)data,&e,sizeof(e))||!event_valid(&e)){mark(A_GATE_FAIL,4,0);flush_log(0);SetLastError(error);return;}
- generation=0;generation_fault=0;render_thread=0;render_context=NULL;
+ generation=0;generation_fault=0;render_thread=0;render_context=NULL;mxd_fr_expire(&frame_reads);frame_reads_age=0;
  memset(&capture,0,sizeof(capture));memset(&camera,0,sizeof(camera));camera_active=camera_seen=camera_failed=0;
  slots_attempted=slots_ok=0;memset(slot_original,0,sizeof(slot_original));run_initialized=running=0;
  if(install_calls()){InterlockedExchange(&event_allowed,1);notify_lifecycle(MXDIRT_EVENT_BEGIN);}else mark(A_INSTALL_FAIL,0,0);

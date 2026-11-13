@@ -100,7 +100,7 @@ static volatile LONG ra_new_run,ra_foreign;static LONG ra_applied_token;
 static int ra_frame_token,ra_phase,ra_bad,ra_rebind,ra_have_position[2],ra_has_geometry[2];
 static int ra_candidate_mask,ra_candidate_conflict,ra_fatal,ra_setup_attempted,ra_enabled;
 static uint64_t ra_surface_frames[16]; /* wheel-frames per MX surface material */
-static int ra_detail_armed,ra_budget_done;static uint64_t ra_solver_frames;static double ra_solver_total_ms,ra_solver_max_ms;
+static int ra_detail_armed,ra_budget_done;static uint64_t ra_solver_frames,ra_solver_slow;static double ra_solver_total_ms,ra_solver_max_ms,ra_solver_late_max_ms;
 static MxbWheelKinematics ra_last_position[2];static MxbWheelSampleMetadata ra_meta[2];
 static volatile LONG ra_reserved;static LONG ra_flushed;static volatile LONG64 ra_order;
 static RaRecord ra_records[RA_RECORDS];static FILE *ra_log;static char ra_ini[MAX_PATH];
@@ -301,8 +301,8 @@ static void ra_flush(void) {
    r->velocity[0][0],r->velocity[0][1],r->velocity[0][2],r->velocity[1][0],r->velocity[1][1],r->velocity[1][2],
    r->omega[0],r->omega[1],r->sampled,r->changed,r->clipped);
  }
- fprintf(ra_log,"{\"active\":true,\"kind\":\"counters\",\"solver_frames\":%llu,\"solver_total_ms\":%.6f,\"solver_max_ms\":%.6f,\"detail_armed\":%d,\"budget_done\":%d,\"records\":%ld}\n",
-  (unsigned long long)ra_solver_frames,ra_solver_total_ms,ra_solver_max_ms,ra_detail_armed,ra_budget_done,ra_reserved);
+ fprintf(ra_log,"{\"active\":true,\"kind\":\"counters\",\"solver_frames\":%llu,\"solver_total_ms\":%.6f,\"solver_max_ms\":%.6f,\"ride_max_ms\":%.3f,\"ride_over_2ms\":%llu,\"detail_armed\":%d,\"budget_done\":%d,\"records\":%ld}\n",
+  (unsigned long long)ra_solver_frames,ra_solver_total_ms,ra_solver_max_ms,ra_solver_late_max_ms,(unsigned long long)ra_solver_slow,ra_detail_armed,ra_budget_done,ra_reserved);
  fprintf(ra_log,"{\"active\":true,\"kind\":\"surface_materials\",\"wheel_frames\":{\"soil\":%llu,\"soft\":%llu,\"compact\":%llu,\"sand\":%llu,\"gravel\":%llu,\"other\":%llu}}\n",
   (unsigned long long)(ra_surface_frames[4]+ra_surface_frames[7]),(unsigned long long)ra_surface_frames[10],(unsigned long long)ra_surface_frames[11],(unsigned long long)ra_surface_frames[5],(unsigned long long)ra_surface_frames[12],
   (unsigned long long)(ra_surface_frames[0]+ra_surface_frames[1]+ra_surface_frames[2]+ra_surface_frames[3]+ra_surface_frames[6]+ra_surface_frames[8]+ra_surface_frames[9]+ra_surface_frames[13]+ra_surface_frames[14]+ra_surface_frames[15]));
@@ -622,6 +622,8 @@ static void ra_complete_frame(int elapsed) {
  if(!ra_online)ra_ghost_record_frame((float)f.dt);
  QueryPerformanceCounter(&end);double ms=(double)(end.QuadPart-start.QuadPart)*1000./freq.QuadPart;
  ra_solver_frames++;ra_solver_total_ms+=ms;if(ms>ra_solver_max_ms)ra_solver_max_ms=ms;
+ /* the first frames carry the pre-wear's one big height update; these two say what a ride itself costs */
+ if(ra_solver_frames>600){if(ms>2.)ra_solver_slow++;if(ms>ra_solver_late_max_ms)ra_solver_late_max_ms=ms;}
  for(int w=0;w<2;w++)ra_last_position[w]=f.postintegration[w];
  RaRecord *r=(ra_detail_armed||f.sequence<=3||f.sequence%60==0)?ra_record(RA_FRAME,result):NULL;
  if(r){r->outer=f.sequence;r->elapsed=elapsed;r->steps=(int)f.new_steps;r->dt=f.dt;r->solver_ms=ms;
@@ -1057,7 +1059,7 @@ API void EventDeinit(void){
   ra_stopped_gap=0;ra_patches_release("event_deinit");ra_flush();
  }
 }
-API void Shutdown(void){EventDeinit();if(GetCurrentThreadId()==ra_owner&&!ra_inflight){
+API void Shutdown(void){EventDeinit();ra_lap_join();if(GetCurrentThreadId()==ra_owner&&!ra_inflight){
  ra_patches_release("shutdown");
  if(!ra_session&&!ra_transport){free(ra_rec);ra_rec=NULL;ra_rec_cap=ra_rec_n=0;}
  if(ra_log){fclose(ra_log);ra_log=NULL;}

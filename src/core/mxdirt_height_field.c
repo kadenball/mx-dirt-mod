@@ -31,9 +31,30 @@ struct MxdirtHeightField {
     float depth_response;
     int32_t visual_lower,visual_upper;
     Axis *x,*z;
+    /* Fine incremental conversion (perf): the source as of the last conversion, so a
+       dirty 128x32 tile is narrowed to the texels that really changed, and for each
+       source column / row the destination vertices that read it. Without them
+       (allocation failed) whole tiles are converted as before. */
+    float *shadow;uint32_t *xfirst,*xend,*zfirst,*zend;int fine;
 };
+/* Which destination vertices read each source column (x) and row (z). */
+static void build_lookup(MxdirtHeightField *p){
+    p->fine=0;if(!p->shadow||!p->xfirst||!p->xend||!p->zfirst||!p->zend)return;
+    for(int axis=0;axis<2;axis++){
+        uint32_t n=axis?p->c.destination_height:p->c.destination_width,m=axis?p->c.source_height:p->c.source_width;
+        const Axis *a=axis?p->z:p->x;uint32_t *first=axis?p->zfirst:p->xfirst,*end=axis?p->zend:p->xend;
+        for(uint32_t c=0;c<m;c++){first[c]=UINT32_MAX;end[c]=0;}
+        for(uint32_t k=0;k<n;k++){
+            if(!a[k].valid)continue;
+            if(!(a[k].low>=0.f)||!(a[k].high>=a[k].low)||!(a[k].high<(float)m))return;
+            for(uint32_t c=(uint32_t)a[k].low;c<=(uint32_t)a[k].high;c++){if(k<first[c])first[c]=k;if(k+1>end[c])end[c]=k+1;}
+        }
+    }
+    p->fine=1;
+}
 void mxdirt_height_field_destroy(MxdirtHeightField *p){
-    if(p){free(p->base);free(p->initial);free(p->staged);free(p->cached);free(p->begin);free(p->end);free(p->committed_begin);free(p->committed_end);free(p->x);free(p->z);free(p);}
+    if(p){free(p->base);free(p->initial);free(p->staged);free(p->cached);free(p->begin);free(p->end);free(p->committed_begin);free(p->committed_end);free(p->x);free(p->z);
+        free(p->shadow);free(p->xfirst);free(p->xend);free(p->zfirst);free(p->zend);free(p);}
 }
 int mxdirt_height_field_create(MxdirtHeightField **out,const MxdirtHeightConfig *c,
     const int16_t *base,const int32_t *initial,size_t count){
@@ -77,6 +98,11 @@ int mxdirt_height_field_create(MxdirtHeightField **out,const MxdirtHeightConfig 
             a[k]=(Axis){f.corners[axis],f.corners[axis+2],f.fractions[axis],valid};
         }
     }
+    /* optional: a failed allocation only means whole-tile conversion */
+    p->shadow=malloc((size_t)c->source_stride*c->source_height*sizeof(float));
+    p->xfirst=malloc(c->source_width*sizeof(uint32_t));p->xend=malloc(c->source_width*sizeof(uint32_t));
+    p->zfirst=malloc(c->source_height*sizeof(uint32_t));p->zend=malloc(c->source_height*sizeof(uint32_t));
+    build_lookup(p);
     *out=p;return 1;
 }
 float mxdirt_height_field_depth_response(const MxdirtHeightField *p){return p?p->depth_response:0.f;}
@@ -112,6 +138,7 @@ int mxdirt_height_field_set_vertex_exact(MxdirtHeightField *p,int enabled){
             a[k]=enabled?(Axis){f.corners[axis],f.corners[axis],0.f,valid}:(Axis){f.corners[axis],f.corners[axis+2],f.fractions[axis],valid};
         }
     }
+    build_lookup(p);
     return 1;
 }
 /* target = initial DFM - (sim height - reference) in DFM units, published 1:1
@@ -150,6 +177,7 @@ int mxdirt_height_field_convert(MxdirtHeightField *p,uint64_t generation,
     }
     memcpy(target,p->staged,p->cells*sizeof(*target));
     memcpy(p->cached,p->staged,p->cells*sizeof(*target));p->has_cache=1;p->last_target=target;
+    if(p->shadow)memcpy(p->shadow,source,(size_t)p->c.source_stride*p->c.source_height*sizeof(float));
     for(uint32_t z=0;z<p->c.destination_height;z++){
         p->committed_begin[z]=0;p->committed_end[z]=p->c.destination_width;
     }
@@ -167,16 +195,33 @@ int mxdirt_height_field_convert_changed_tiles(MxdirtHeightField *p,uint64_t gene
     for(uint32_t z=0;z<p->c.destination_height;z++){p->begin[z]=UINT32_MAX;p->end[z]=0;}
     for(uint32_t tz=0;tz<nz;tz++)for(uint32_t tx=0;tx<nx;tx++){
         if(!tiles[(size_t)tz*nx+tx])continue;
-        uint32_t start=UINT32_MAX,end=0;float low=(float)(tx*128),high=low+128.f;
+        /* source texels to account for: the tile, or (fine) the box of its texels that differ
+           from the source last converted - a wheel changes a few dozen texels of a 4096-texel tile */
+        uint32_t c0=tx*128,c1=c0+128,r0=tz*32,r1=r0+32,xs=0,xe=p->c.destination_width,zs=0,ze=p->c.destination_height;
+        if(c1>p->c.source_width)c1=p->c.source_width;if(r1>p->c.source_height)r1=p->c.source_height;
+        if(p->fine){
+            uint32_t bc0=UINT32_MAX,bc1=0,br0=UINT32_MAX,br1=0;const size_t bytes=(size_t)(c1-c0)*sizeof(float);
+            for(uint32_t r=r0;r<r1;r++){
+                const float *a=source+(size_t)r*p->c.source_stride+c0,*b=p->shadow+(size_t)r*p->c.source_stride+c0;
+                if(!memcmp(a,b,bytes))continue;
+                uint32_t f=0,l=c1-c0;while(!memcmp(a+f,b+f,sizeof(float)))f++;while(!memcmp(a+l-1,b+l-1,sizeof(float)))l--;
+                if(c0+f<bc0)bc0=c0+f;if(c0+l>bc1)bc1=c0+l;if(br0==UINT32_MAX)br0=r;br1=r+1;
+            }
+            if(br0==UINT32_MAX)continue; /* marked, but nothing in it changed */
+            c0=bc0;c1=bc1;r0=br0;r1=br1;xs=zs=UINT32_MAX;xe=ze=0;
+            for(uint32_t c=c0;c<c1;c++){if(p->xfirst[c]<xs)xs=p->xfirst[c];if(p->xend[c]>xe)xe=p->xend[c];}
+            for(uint32_t r=r0;r<r1;r++){if(p->zfirst[r]<zs)zs=p->zfirst[r];if(p->zend[r]>ze)ze=p->zend[r];}
+        }
+        uint32_t start=UINT32_MAX,end=0;float low=(float)c0,high=(float)c1;
         /* A destination lookup is affected if either of its source columns
-           intersects the tile. Include both neighbours across tile borders. */
-        for(uint32_t x=0;x<p->c.destination_width;x++){
+           intersects the span. Include both neighbours across its borders. */
+        for(uint32_t x=xs;x<xe;x++){
             Axis a=p->x[x];if(!a.valid||a.high<low||a.low>=high)continue;
             if(start==UINT32_MAX)start=x;end=x+1;
         }
         if(start==UINT32_MAX)continue;
-        low=(float)(tz*32);high=low+32.f;
-        for(uint32_t z=0;z<p->c.destination_height;z++){
+        low=(float)r0;high=(float)r1;
+        for(uint32_t z=zs;z<ze;z++){
             Axis a=p->z[z];if(!a.valid||a.high<low||a.low>=high)continue;
             if(start<p->begin[z])p->begin[z]=start;if(end>p->end[z])p->end[z]=end;
         }
@@ -209,6 +254,17 @@ int mxdirt_height_field_convert_changed_tiles(MxdirtHeightField *p,uint64_t gene
     }else{memcpy(target,p->cached,p->cells*sizeof(*target));p->last_target=target;}
     memcpy(p->committed_begin,p->begin,p->c.destination_height*sizeof(*p->begin));
     memcpy(p->committed_end,p->end,p->c.destination_height*sizeof(*p->end));
+    /* the conversion succeeded: these tiles' source is now the source last converted */
+    if(p->fine)for(uint32_t tz=0;tz<nz;tz++)for(uint32_t tx=0;tx<nx;tx++){
+        if(!tiles[(size_t)tz*nx+tx])continue;
+        uint32_t c0=tx*128,c1=c0+128,r0=tz*32,r1=r0+32;
+        if(c1>p->c.source_width)c1=p->c.source_width;if(r1>p->c.source_height)r1=p->c.source_height;
+        const size_t bytes=(size_t)(c1-c0)*sizeof(float);
+        for(uint32_t r=r0;r<r1;r++){
+            const float *a=source+(size_t)r*p->c.source_stride+c0;float *b=p->shadow+(size_t)r*p->c.source_stride+c0;
+            if(memcmp(a,b,bytes))memcpy(b,a,bytes);
+        }
+    }
     if(stats)*stats=s;return 1;
 }
 int mxdirt_height_field_changed_rows(const MxdirtHeightField *p,uint64_t generation,
