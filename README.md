@@ -318,7 +318,7 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `dirt_material` | 1 | The dirt shading pass. |
 | `dirt_strength` | 135 | Strength of the shading, 0–200 %. |
 | `dirt_loose` | 55 | Fine loose grain on worked ground, 0–100 %. |
-| `dirt_fade_start` / `dirt_fade_end` | 75 / 100 | Distance (m) where the look fades out; the end is 100 at most (the dirt is drawn about 95 m ahead, 65 m to the sides). A file that still has the old 45 / 60 is read as 75 / 100. |
+| `dirt_fade_start` / `dirt_fade_end` | 75 / 100 | Distance (m) where the look fades out; the end is 100 at most (the dirt is drawn about 95 m ahead, 65 m to the sides). A file that still has the old 45 / 60 is read as 75 / 100 (for 60 m write 44 / 60; the launcher does). |
 | `soft_layer` | 1 | Draw the soft dirt layer. |
 | `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
 | `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |

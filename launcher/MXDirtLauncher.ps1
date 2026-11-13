@@ -161,8 +161,10 @@ function Save-All {
     else{ $was=$true;foreach($k in $ArcadeHidden.Keys){ if((Get-Val $L.active 'soil' $k '100') -ne "$($ArcadeHidden[$k])"){$was=$false} }
         if($was){ foreach($k in $ArcadeHidden.Keys){ Set-Val $L.active 'soil' $k '100' } } }
     foreach($n in $Num){ Set-Val $L[$n[0]] $n[1] $n[2] "$([int]$ctl[$n[2]].Value)" }
-    # the renderer drops its dirt pass unless start < end <= 60
-    $end=[int]$ctl['dirt_fade_end'].Value; Set-Val $L.renderer 'renderer' 'dirt_fade_start' "$([Math]::Max(5,[int]($end*.75)))"
+    # the renderer drops its dirt pass unless start < end <= 100. It reads 45 / 60 (the default
+    # before 1.6) as today's default, so a distance of 60 picked here is written as 44 / 60.
+    $end=[int]$ctl['dirt_fade_end'].Value; $start=[Math]::Max(5,[int]($end*.75)); if($end -eq 60){ $start=44 }
+    Set-Val $L.renderer 'renderer' 'dirt_fade_start' "$start"
     foreach($c in $Chk){ Set-Val $L[$c[0]] $c[1] $c[2] $(if($ctl[$c[2]].Checked){'1'}else{'0'}) }
     foreach($k in $Ini.Keys){ [IO.File]::WriteAllLines($Ini[$k],[string[]]$L[$k],$Enc) }
     $status.ForeColor=[Drawing.Color]::DarkGreen
