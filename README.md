@@ -42,7 +42,7 @@ Prefer copying files yourself? See [Manual install](#manual-install-no-installer
 ## Requirements
 
 - Windows 10 or 11, 64-bit.
-- **MX Bikes from Steam, build 23566986.** The exact `mxbikes.exe` hash is in `SUPPORTED_EXE.txt`.
+- **MX Bikes from Steam, build 26852311** (the update of 23 November 2026). The exact `mxbikes.exe` hash is in `SUPPORTED_EXE.txt`. Releases up to 1.7.1 were for the build before it and stay switched off on this one.
   - The mod hooks fixed places in that exact executable.
   - With any other game version it switches itself off and the game runs normally, until a release for that version is out. Nothing breaks.
 - A graphics card with OpenGL 4 (any GPU from the last ten years).
@@ -194,6 +194,10 @@ MX Bikes saves only the track's heights. The mod saves the rest of the soil with
   - Loose soil the simulation throws around (berms beside the line, soil shoved into bump rows, roost behind a spinning tyre) falls into the trenches and buries old prints. Untouched ground stays clean.
   - The in-game Deformation slider scales it like the ruts (slider at 0: no layer).
 - Up close it's drawn with real depth (parallax) and its own shadows. The ground's own texture moves with the relief, so it reads as solid dirt, and the tyres sit in the loose soil instead of on top of it.
+- It moves with your tyres as you ride: pressed down under them, squeezed up beside them, shoved ahead when you brake, scooped out and thrown back under wheelspin (`soft_live_tyres`).
+- **Surface** (launcher, or `surface` in `mx_dirt.ini`): loam, hardpack, sand or mud change how the layer and the ruts behave and look; "Track default" keeps each part of the track as it is. Each surface keeps its own saved wear, so switching back brings your old ruts back.
+- In-game **Reset Track** starts the track fresh at your starting-wear level, without your earlier laps.
+- **3D top layer (test, off by default):** `soft_mesh=1` draws the layer as real geometry within `soft_mesh_m` metres (30) - lips and clods stand up and nothing slides as you move. It costs about 2-3 ms of GPU time per frame.
 - It's **a look only**: the bike rides the dirt simulation's ruts under it. The layer is drawn lying on top of that ridden ground, so a pressed trench floor is where the tyre actually rolls.
 - Its marks are saved with the track in `plugins\mx_dirt_soft\<track>\`.
 
@@ -290,6 +294,7 @@ All settings live in two text files in `MX Bikes\plugins`, with comments. The la
 | Key | Default | Range | What it does |
 |---|---|---|---|
 | `[active] enabled` | 1 | 0/1 | 0 turns the simulation plugin off. |
+| `surface` | 0 | 0–4 | What the ground is made of: 0 the track's own surfaces, 1 loam, 2 hardpack, 3 sand, 4 mud. Applies live. |
 | `dirt_sim_depth_percent` | 60 | 10–300 | How deep tyres cut. Also follows the in-game Deformation slider. |
 | `dirt_sim_firmness_percent` | 55 | 0–100 | 0 = freshly ripped soft dirt, 100 = hard-pack. |
 | `dirt_sim_moisture_percent` | 35 | 0–100 | 0 dry/dusty, 35 ideal, 100 muddy. |
@@ -339,6 +344,9 @@ An out-of-range value switches the simulation off for that game start, and the r
 | `soft_solid` | 1 | The ground texture follows the soft layer's relief (0 = relief shading only). |
 | `soft_lift_percent` | 100 | How high the untouched soft layer sits above the game's ground, 0–100 %. Lower it if ruts seem to slide when seen up close (fender camera, replays). At 0, ground nobody rode is drawn exactly as the game draws it. |
 | `tyre_sink` | 1 | Tyres sink into raised loose soil (0 = they are drawn on top of it). |
+| `soft_live_tyres` | 1 | The soft layer moves with your tyres as you ride (0 = only the marks left behind). |
+| `soft_mesh` | 0 | Test: the soft layer as real 3D geometry near the camera. Costs about 2-3 ms of GPU time. |
+| `soft_mesh_m` | 30 | How far the 3D soft layer reaches, 10–40 m. |
 | `raised_dirt_surface` | 1 | Raised-dirt surface fix. |
 | `content_log` | `plugins\mx_dirt_render.log` | Diagnostic log; empty = none. |
 
@@ -479,7 +487,7 @@ You need [Zig](https://ziglang.org/) 0.13 or newer on `PATH`; it is used as the 
 ```
 .\build.ps1                    # core plugin   -> build\mx_dirt.dll   (install as plugins\mx_dirt.dlo)
 .\build_render.ps1             # render plugin -> build\mx_dirt_render.dll
-.\package.ps1 -Version 1.7.1   # both + the release zip in build\
+.\package.ps1 -Version 1.8.0   # both + the release zip in build\
 ```
 
 Source layout:
