@@ -63,15 +63,15 @@ typedef struct {
  LONGLONG qpc;double solver_ms;float dt,force,center[2][3],velocity[2][3],omega[2];
  size_t sampled,changed,clipped;
 } RaRecord;
-static const char ra_exe_sha[]="9e792d7aed1dc40df11eea51d1a6d0519daec7be2b65609905df8c9de804a291";
+static const char ra_exe_sha[]="fdde0154af35ea3d6783e67410e68047f057a6375987b394ed43ffdc06e05d5f";
 static const unsigned char ra_wheel_call[]={0xe8,0xef,0xb8,0xff,0xff};
 static const unsigned char ra_wheel_entry[]={0xf3,0x0f,0x11,0x54,0x24,0x18,0x4c,0x8b,0xdc,0x49,0x89,0x4b,0x08,0x56,0x57,0x41,0x55,0x48,0x81,0xec,0x70,0x03,0,0};
 /* Client/host track-close calls and FNV-1a hashes of their targets. */
-static const unsigned char ra_close_calls[2][5]={{0xe8,0xe1,0xcc,0x17,0},{0xe8,0xc1,0x79,0x17,0}};
-static const unsigned ra_close_sites[2]={0x1270ba,0x126bda};
-static const unsigned ra_close_targets[2]={0x2a3da0,0x29e5a0};
+static const unsigned char ra_close_calls[2][5]={{0xe8,0x91,0xcf,0x17,0},{0xe8,0x71,0x7c,0x17,0}};
+static const unsigned ra_close_sites[2]={0x12704a,0x126b6a};
+static const unsigned ra_close_targets[2]={0x2a3fe0,0x29e7e0};
 static const unsigned ra_close_lengths[2]={156,520};
-static const uint64_t ra_close_hashes[2]={UINT64_C(0xce1c6bd9f8393b5b),UINT64_C(0x2cb761237dcc3184)};
+static const uint64_t ra_close_hashes[2]={UINT64_C(0xeeb30b3c22c4a5a8),UINT64_C(0x7ed2fafd0ff15f0c)};
 static unsigned char *ra_image;static uint64_t ra_image_size;
 static RaWheelFn ra_original_wheel;static RaOuterFn ra_original_outer;
 static RaCloseFn ra_original_close[2];static RaHook ra_hooks[4];static MxbFrameCallsitePlan ra_plan;
@@ -85,6 +85,8 @@ static unsigned ra_hardness_percent=100,ra_breakdown_percent=100,ra_drying_perce
 static unsigned ra_extra_riders=0,ra_live_gate=1,ra_live_wear=0;
 /* [terrain]: how worn tiles are handed to the game (see mxb_publication_hooks_pacing) */
 static unsigned ra_batch_tiles=4,ra_send_interval=0;
+/* [soil] surface: 0 the track's own surfaces, 1 loam, 2 hardpack, 3 sand, 4 mud (see ra_sim_material, ra_eff) */
+static unsigned ra_surface=0;
 /* Online wear (EXPERIMENTAL, [online] online_wear=1): active in online race events too, and the other riders wear the track
    (mxdirt_remote.h). ra_online: this event is a race. No pre-wear, ghosts, lap recording or saved soil / marks there. */
 static unsigned ra_online_wear=0,ra_online_echo=0;static int ra_online;
@@ -363,8 +365,28 @@ static int ra_sand_match(const char *track){
  }
  return 0;
 }
-/* Wheel material as the dirt sim sees it: soil on a sand track becomes sand. */
-static int ra_sim_material(int m){return ra_track_sand&&(m==4||m==7||m==10||m==11)?5:m;}
+/* Wheel material as the dirt sim sees it. A chosen surface (ra_surface) turns every ridden soil, soft, sand
+   and hardpack surface into it (gravel stays gravel; mud is soil, made wet by ra_eff). Otherwise soil on a
+   sand track becomes sand. */
+static int ra_sim_material(int m){return !ra_surface&&ra_track_sand&&(m==4||m==7||m==10||m==11)?5:m;}
+/* per surface (track, loam, hardpack, sand, mud): rut depth x, wear from your laps +percent, bumps x */
+static const float ra_surf_depth[5]={1.f,1.3f,.5f,1.6f,1.7f},ra_surf_wear[5]={0.f,25.f,0.f,60.f,70.f},ra_surf_bumps[5]={1.f,1.f,1.6f,.5f,.7f};
+static float ra_clampf(float v,float lo,float hi){return v<lo?lo:v>hi?hi:v;}
+static float ra_surf_live_wear(void){return ra_clampf((float)ra_live_wear+ra_surf_wear[ra_surface<5?ra_surface:0],0.f,200.f);}
+static float ra_surf_bump_pct(void){return ra_clampf((float)ra_bumps_percent*ra_surf_bumps[ra_surface<5?ra_surface:0],0.f,200.f);}
+/* The values the sim gets for the user's settings on the chosen surface: 0 moisture, 1 firmness (percent),
+   2 drying, 3 wall cohesion, 4 roost clods (percent of the user's). The track default passes them through. */
+static float ra_eff(int k){
+ const float mo=(float)ra_dirt_sim_moisture,fi=(float)ra_dirt_sim_firmness,dr=(float)ra_drying_percent,co=(float)ra_cohesion_percent,cl=(float)ra_clods_percent;
+ float v=k==0?mo:k==1?fi:k==2?dr:k==3?co:cl;
+ switch(ra_surface){
+ case 1:v=k==0?fminf(100.f,mo+10.f):k==1?fi*.7f:v;break;                     /* loam: a bit damper, softer */
+ case 2:v=k==0?mo*.5f:k==1?40.f+fi*.6f:k==2?dr*1.3f:v;break;                 /* hardpack: dry, firm, dries fast */
+ case 3:v=k==1?fi*.5f:k==3?co*.5f:v;break;                                   /* sand: loose, walls fall in */
+ case 4:v=k==0?70.f+mo*.3f:k==1?fi*.4f:k==2?dr*.25f:k==3?co*1.5f:cl*1.8f;break; /* mud: wet, soft, holds walls, throws clods */
+ }
+ const float hi=k==0||k==1?100.f:k==2?400.f:300.f;return v<0.f?0.f:v>hi?hi:v;
+}
 static int ra_grid_raw(unsigned side,RaGrid *out){
  unsigned char raw[0x70];RaGrid g;memset(&g,0,sizeof(g));
  if(side>1||!ra_read(NULL,(uint64_t)(uintptr_t)ra_image+0x568488+side*0x6160+0x740,raw,sizeof(raw)))return 0;
@@ -448,27 +470,70 @@ static void ra_terrain_dump(const RaGrid *g,const int16_t *base,const int32_t *d
 static void ra_ghost_free(void);
 static void ra_soft_save(void);
 static void ra_soil_save(void);
+static void ra_tag_write(unsigned v);
+static unsigned ra_save_surface(void);
 static void ra_solver_destroy(void){
  if(!ra_online){
  ra_soft_save(); /* the track keeps its soft-layer marks with its saved wear */
  ra_soil_save(); /* and the dirt sim's packing, loose soil, moisture and prints */
+ ra_tag_write(ra_save_surface()); /* the game saves this track now: it is this surface's wear */
  }
  mxdirt_session_destroy(ra_session);ra_session=NULL;ra_ghost_free(); /* laps were borrowed by that session */
 }
 #include "mxdirt_laps.inc"
-/* plugins\mx_dirt_soft\<track>\layer.msl */
-static int ra_soft_path(char *out,size_t cap,int create){
- char dir[MAX_PATH];return ra_lap_dir(RA_SOFT_DIR,dir,sizeof(dir),create)&&snprintf(out,cap,"%s\\layer.msl",dir)<(int)cap;
+/* Each surface keeps its own wear: plugins\mx_dirt_soft\<track>\s<N>\ holds that surface's top layer
+   (layer.msl), soil (soil.mss) and, while another surface is ridden, its track heights (wear.dfm).
+   surface.tag beside them names the surface the game's saved track (testing.dfm) belongs to. */
+static int ra_surf_file(char *out,size_t cap,unsigned surface,const char *name,int create){
+ char dir[MAX_PATH],sub[MAX_PATH];if(!ra_lap_dir(RA_SOFT_DIR,dir,sizeof(dir),create)||snprintf(sub,sizeof(sub),"%s\\s%u",dir,surface)>=(int)sizeof(sub))return 0;
+ if(create)CreateDirectoryA(sub,NULL);
+ if(snprintf(out,cap,"%s\\%s",sub,name)>=(int)cap)return 0;
+ /* loading the track default: files saved before surfaces had their own folders */
+ if(!create&&!surface&&GetFileAttributesA(out)==INVALID_FILE_ATTRIBUTES&&snprintf(out,cap,"%s\\%s",dir,name)>=(int)cap)return 0;
+ return 1;
+}
+static unsigned ra_save_surface(void){return ra_surface<5?ra_surface:0;}
+static int ra_soft_path(char *out,size_t cap,int create){return ra_surf_file(out,cap,ra_save_surface(),"layer.msl",create);}
+static int ra_tag_path(char *out,size_t cap,int create){char dir[MAX_PATH];return ra_lap_dir(RA_SOFT_DIR,dir,sizeof(dir),create)&&snprintf(out,cap,"%s\\surface.tag",dir)<(int)cap;}
+static unsigned ra_tag_read(void){char p[MAX_PATH];unsigned v=0;if(!ra_tag_path(p,sizeof(p),0))return 0;FILE *f=fopen(p,"rb");if(!f)return 0;if(fscanf(f,"%u",&v)!=1||v>4)v=0;fclose(f);return v;}
+static void ra_tag_write(unsigned v){char p[MAX_PATH];if(!ra_tag_path(p,sizeof(p),1))return;FILE *f=fopen(p,"wb");if(f){fprintf(f,"%u\n",v);fclose(f);}}
+/* wear.dfm: "MXW1", width, height, then the int32 deformation */
+static int ra_wear_write(unsigned surface,const int32_t *dfm,uint32_t w,uint32_t h){
+ char p[MAX_PATH],tmp[MAX_PATH];if(!ra_surf_file(p,sizeof(p),surface,"wear.dfm",1)||snprintf(tmp,sizeof(tmp),"%s.tmp",p)>=(int)sizeof(tmp))return 0;
+ FILE *f=fopen(tmp,"wb");if(!f)return 0;
+ int ok=fwrite("MXW1",1,4,f)==4&&fwrite(&w,4,1,f)==1&&fwrite(&h,4,1,f)==1&&fwrite(dfm,4,(size_t)w*h,f)==(size_t)w*h;ok=fclose(f)==0&&ok;
+ return ok&&MoveFileExA(tmp,p,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
+}
+static int ra_wear_read(unsigned surface,int32_t *dfm,uint32_t w,uint32_t h){
+ char p[MAX_PATH],m[4];uint32_t fw=0,fh=0;if(!ra_surf_file(p,sizeof(p),surface,"wear.dfm",0))return 0;FILE *f=fopen(p,"rb");if(!f)return 0;
+ int ok=fread(m,1,4,f)==4&&!memcmp(m,"MXW1",4)&&fread(&fw,4,1,f)==1&&fread(&fh,4,1,f)==1&&fw==w&&fh==h&&fread(dfm,4,(size_t)w*h,f)==(size_t)w*h;
+ fclose(f);return ok;
+}
+static void ra_wear_drop(unsigned surface){char p[MAX_PATH];if(ra_surf_file(p,sizeof(p),surface,"wear.dfm",1))DeleteFileA(p);}
+/* At setup, before soil, top layer and pre-wear: the track as the game saved it belongs to the surface in
+   surface.tag. Another surface selected: that wear is kept in its own folder and the selected surface's
+   kept wear (or a fresh track, then pre-worn) is published in its place. */
+static void ra_surface_wear_setup(const int32_t *dfm){
+ const unsigned T=ra_tag_read(),S=ra_save_surface();const uint32_t W=ra_config.height.destination_width,H=ra_config.height.destination_height;
+ int stashed=0,restored=0,switched=0;uint64_t worn=0;
+ if(T!=S&&(size_t)W*H==RA_CELLS){
+  worn=mxdirt_session_saved_wear(ra_session,.015); /* the game's saved track: the session starts from it */
+  if(worn>4000)stashed=ra_wear_write(T,dfm,W,H);else ra_wear_drop(T);
+  int32_t *x=calloc(RA_CELLS,sizeof(int32_t));
+  if(x){restored=ra_wear_read(S,x,W,H);if(!restored)memset(x,0,RA_CELLS*sizeof(int32_t));
+   switched=mxdirt_session_rebase(ra_session,x,dfm,RA_CELLS);free(x);}
+ }
+ if(T==S||switched)ra_tag_write(S);
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"surface_wear\",\"selected\":%u,\"saved_track_surface\":%u,\"saved_track_texels\":%llu,\"kept\":%d,\"restored\":%d,\"switched\":%d}\n",
+  S,T,(unsigned long long)worn,stashed,restored,switched);fflush(ra_log);}
 }
 static void ra_soft_save(void){
  MxdirtSoftView v;char path[MAX_PATH];if(!ra_session||!mxdirt_session_soft_view(ra_session,&v)||(!v.stamps&&!v.loaded)||!ra_soft_path(path,sizeof(path),1))return;
  LARGE_INTEGER a,b,f;QueryPerformanceCounter(&a);int ok=mxdirt_session_soft_save(ra_session,path);QueryPerformanceCounter(&b);QueryPerformanceFrequency(&f);
  if(ra_log){fprintf(ra_log,"{\"kind\":\"soft_layer_save\",\"ok\":%d,\"tiles\":%u,\"refused\":%u,\"stamps\":%llu,\"ms\":%.0f}\n",ok,v.allocated,v.refused,(unsigned long long)v.stamps,(double)(b.QuadPart-a.QuadPart)*1000./(double)f.QuadPart);fflush(ra_log);}
 }
-/* plugins\mx_dirt_soft\<track>\soil.mss: the dirt sim's soil state (MX Bikes saves only heights) */
-static int ra_soil_path(char *out,size_t cap,int create){
- char dir[MAX_PATH];return ra_lap_dir(RA_SOFT_DIR,dir,sizeof(dir),create)&&snprintf(out,cap,"%s\\soil.mss",dir)<(int)cap;
-}
+/* s<N>\soil.mss: the dirt sim's soil state (MX Bikes saves only heights) */
+static int ra_soil_path(char *out,size_t cap,int create){return ra_surf_file(out,cap,ra_save_surface(),"soil.mss",create);}
 static void ra_soil_save(void){
  char path[MAX_PATH];if(!ra_session||!ra_soil_path(path,sizeof(path),1))return;
  uint64_t wear=mxdirt_session_saved_wear(ra_session,.015);if(wear<=4000)return; /* nothing worn worth keeping (a reset track saves no soil) */
@@ -516,15 +581,17 @@ static int ra_setup(void) {
  stage="session_settings";
  /* Sharp ruts are optional per track: an unusual grid keeps blended publication. */
  ra_sharp_live=ra_sharp_ruts&&mxdirt_session_set_sharp_ruts(ra_session,1);
- if((ra_bumps_percent&&(!mxdirt_session_set_bumps(ra_session,(float)ra_bumps_percent)||!mxdirt_session_set_rolling_bumps(ra_session,(float)ra_rolling_bumps_percent)))||
-    !mxdirt_session_start_sim(ra_session,ra_game_depth(),(float)ra_dirt_sim_firmness)||
-    !mxdirt_session_set_dirt_moisture(ra_session,(float)ra_dirt_sim_moisture)||
+ if((ra_bumps_percent&&(!mxdirt_session_set_bumps(ra_session,ra_surf_bump_pct())||!mxdirt_session_set_rolling_bumps(ra_session,(float)ra_rolling_bumps_percent)))||
+    !mxdirt_session_start_sim(ra_session,ra_clampf(ra_game_depth()*ra_surf_depth[ra_surface<5?ra_surface:0],10.f,300.f),ra_eff(1))||
+    !mxdirt_session_set_surface(ra_session,(int)ra_surface)||
+    !mxdirt_session_set_dirt_moisture(ra_session,ra_eff(0))||
     !mxdirt_session_set_dirt_response(ra_session,(float)ra_hardness_percent,(float)ra_breakdown_percent)||
-    !mxdirt_session_set_dirt_weather(ra_session,(float)ra_drying_percent,(float)ra_sweep_percent)||
-    !mxdirt_session_set_dirt_shape(ra_session,(float)ra_capture_percent,(float)ra_cohesion_percent,(float)ra_clods_percent)||
-    !mxdirt_session_set_extra_riders(ra_session,ra_extra_riders)||!mxdirt_session_set_live_gate(ra_session,ra_live_gate)||!mxdirt_session_set_live_wear(ra_session,(float)ra_live_wear)){
+    !mxdirt_session_set_dirt_weather(ra_session,ra_eff(2),(float)ra_sweep_percent)||
+    !mxdirt_session_set_dirt_shape(ra_session,(float)ra_capture_percent,ra_eff(3),ra_eff(4))||
+    !mxdirt_session_set_extra_riders(ra_session,ra_extra_riders)||!mxdirt_session_set_live_gate(ra_session,ra_live_gate)||!mxdirt_session_set_live_wear(ra_session,ra_surf_live_wear())){
   ra_solver_destroy();goto end;
  }
+ if(!ra_online)ra_surface_wear_setup(dfm); /* each surface keeps its own wear */
  stage="grid_changed";
  if(!ra_grid_read(&last)||memcmp(&first,&last,sizeof(first))){ra_solver_destroy();goto end;}
  ra_grid=first;ra_rebind=1;ok=1;
@@ -540,6 +607,31 @@ end:if(!ok)ra_solver_destroy();free(base);free(dfm);QueryPerformanceCounter(&end
  if(!ok&&ra_log){fprintf(ra_log,"{\"active\":false,\"kind\":\"setup_failed\",\"stage\":\"%s\"}\n",stage);fflush(ra_log);}
  if(!ok){ra_latch_first_fault(-130);ra_fatal=1;}return ok;
 }
+/* The game reset the track under a live session (its own track reset): the cells we sent read back flat.
+   The session starts over in place from the fresh track and the pre-wear gate rides again, so the reset
+   gives the selected surface's fresh moto-1 track, not the old ride's soil and top layer. Checked only with
+   nothing in flight (a queued pre-wear upload must not read as a reset), at most once per 10 s. */
+static unsigned ra_game_resets;static LONGLONG ra_game_reset_last;
+static int ra_prewear_again(uint64_t *passes);
+static int ra_game_reset_check(const char *why){ /* 1: compared (or nothing to do), 0: busy, try again */
+ if(!ra_session||ra_online||ra_fatal||!ra_transport)return 1;
+ LARGE_INTEGER now,fq;QueryPerformanceCounter(&now);QueryPerformanceFrequency(&fq);
+ if(ra_game_reset_last&&now.QuadPart-ra_game_reset_last<10*fq.QuadPart)return 1;
+ MxbTransportState st;if(!mxb_transport_state(ra_transport,&st)||st.faulted||st.queued_targets||st.outstanding_events)return 0;
+ const int32_t *acc=mxdirt_session_accepted(ra_session);const size_t n=RA_CELLS;if(!acc)return 1;
+ int32_t *nat=malloc(n*sizeof(int32_t));if(!nat)return 1;
+ if(!ra_read(NULL,ra_grid.published,nat,n*sizeof(int32_t))){free(nat);return 1;}
+ const double k=ra_config.height.mxb_vertical_scale/(65535.*65536.),thr=k>0.?.015/k:1e30;
+ uint64_t worn=0,flat=0;for(size_t i=0;i<n;i++)if(fabs((double)acc[i])>thr){worn++;if(fabs((double)nat[i])<.25*thr)flat++;}
+ if(worn>20000&&flat*100>worn*95){
+  ra_game_reset_last=now.QuadPart;ra_game_resets++;
+  int ok=mxdirt_session_rebase(ra_session,nat,nat,n);uint64_t passes=0;int pw=ok?ra_prewear_again(&passes):0;ra_rebind=1;
+  if(ra_log){fprintf(ra_log,"{\"kind\":\"game_track_reset\",\"why\":\"%s\",\"worn_cells\":%llu,\"flat_cells\":%llu,\"rebased\":%d,\"prewear\":%d,\"passes\":%llu,\"resets\":%u}\n",
+   why,(unsigned long long)worn,(unsigned long long)flat,ok,pw,(unsigned long long)passes,ra_game_resets);fflush(ra_log);}
+ }
+ free(nat);return 1;
+}
+static int ra_reset_check_due;
 static int ra_same_grid_check(void){RaGrid now;return ra_grid_read(&now)&&!memcmp(&now,&ra_grid,sizeof(now));}
 static MxbFrameGate ra_gate(void) {
  MxbFrameGate g={ra_generation,ra_bike,GetCurrentThreadId(),1,
@@ -677,7 +769,7 @@ static __declspec(noinline) int ra_outer(int elapsed) {
       if(offer<0){MxbTransportState st; /* transport refused because it faulted: self-heal, defer this offer */
        if(ra_transport&&ra_transport_recovery_budget&&mxb_transport_state(ra_transport,&st)&&st.faulted){
         if(ra_transport_fault_have!=2){ra_transport_fault_state=st;ra_transport_fault_got=1;ra_transport_fault_have=1;}
-        if(mxb_transport_recover(ra_transport,ra_owner)){ra_transport_recoveries++;ra_transport_recovery_budget--;offer=0;}}}
+        if(mxb_transport_recover(ra_transport,ra_owner)){ra_transport_recoveries++;ra_transport_recovery_budget--;offer=0;ra_reset_check_due=120;}}}
       if(offer<0){ra_phase=0;ra_fault(-122);}
       else if(!offer)ra_publish_deferred++;else ra_publish_accepted++;
       if(offer<=0)ra_mark(RA_PUBLISH,offer);
@@ -693,10 +785,12 @@ static __declspec(noinline) int ra_outer(int elapsed) {
   if(++ra_transport_recovery_clock>=RA_TRANSPORT_RECOVERY_REFILL){ra_transport_recovery_clock=0;if(ra_transport_recovery_budget<RA_TRANSPORT_RECOVERY_BURST)ra_transport_recovery_budget++;}
   if(ra_transport&&!ra_fatal){MxbTransportState state;int got=mxb_transport_state(ra_transport,&state);
   if(!got||state.faulted){if(ra_transport_fault_have!=2){ra_transport_fault_state=state;ra_transport_fault_got=got;ra_transport_fault_have=1;}
-    if(got&&ra_transport_recovery_budget&&mxb_transport_recover(ra_transport,ra_owner)){ra_transport_recoveries++;ra_transport_recovery_budget--;}
+    if(got&&ra_transport_recovery_budget&&mxb_transport_recover(ra_transport,ra_owner)){ra_transport_recoveries++;ra_transport_recovery_budget--;ra_reset_check_due=120;}
     else{ra_transport_recovery_failures++;ra_fault(-123);}}}
   if(ra_phase&&!ra_bad&&!ra_fatal&&ra_frame_token==ra_reset_token&&ra_running&&ra_allowed)ra_complete_frame(elapsed);
   else if(ra_phase)ra_rebind=1;
+  /* a self-heal adopted the game's terrain: was it the game's own track reset? (retried while uploads are in flight) */
+  if(ra_reset_check_due&&!ra_fatal){ra_reset_check_due--;if(ra_game_reset_check("self_heal"))ra_reset_check_due=0;}
   if(!ra_bike&&ra_candidate_mask==3&&!ra_candidate_conflict&&ra_session){ra_bike=ra_candidate;ra_rebind=1;ra_mark(RA_BIND,1);}
   if(ra_candidate_conflict)ra_fault(-111);
   if(!ra_budget_done&&ra_reserved>=(LONG)RA_RECORDS-8){ra_budget_done=1;ra_mark(RA_BUDGET,1);}
@@ -791,12 +885,12 @@ static int ra_install(const char *verified_hash) {
  for(int j=0;j<4;j++)if(ra_hooks[j].owned)return 0;
  unsigned char call[5],entry[sizeof(ra_wheel_entry)];
  if(mxb_frame_callsite_plan(ra_read,NULL,(uint64_t)(uintptr_t)ra_image,ra_image_size,verified_hash,&ra_plan)!=MXB_FRAME_OK||
-    !ra_read(NULL,(uint64_t)(uintptr_t)ra_image+0x1a76bc,call,5)||memcmp(call,ra_wheel_call,5)||
-    !ra_read(NULL,(uint64_t)(uintptr_t)ra_image+0x1a2fb0,entry,sizeof(entry))||memcmp(entry,ra_wheel_entry,sizeof(entry))||
+    !ra_read(NULL,(uint64_t)(uintptr_t)ra_image+0x1a775c,call,5)||memcmp(call,ra_wheel_call,5)||
+    !ra_read(NULL,(uint64_t)(uintptr_t)ra_image+0x1a3050,entry,sizeof(entry))||memcmp(entry,ra_wheel_entry,sizeof(entry))||
     !ra_close_signature(0)||!ra_close_signature(1))return 0;
- ra_original_wheel=(RaWheelFn)(ra_image+0x1a2fb0);ra_original_outer=(RaOuterFn)(ra_image+0x2a9bd0);
- if(!ra_hook_plan(&ra_hooks[0],ra_image+0x1a76bc,ra_wheel_call,(uintptr_t)ra_wheel)||
-    !ra_hook_plan(&ra_hooks[1],ra_image+0x135d70,ra_plan.original_call,(uintptr_t)ra_outer)||
+ ra_original_wheel=(RaWheelFn)(ra_image+0x1a3050);ra_original_outer=(RaOuterFn)(ra_image+0x2a9e10);
+ if(!ra_hook_plan(&ra_hooks[0],ra_image+0x1a775c,ra_wheel_call,(uintptr_t)ra_wheel)||
+    !ra_hook_plan(&ra_hooks[1],ra_image+0x135d40,ra_plan.original_call,(uintptr_t)ra_outer)||
     !ra_hook_plan(&ra_hooks[2],ra_image+ra_close_sites[0],ra_close_calls[0],(uintptr_t)ra_client_close)||
     !ra_hook_plan(&ra_hooks[3],ra_image+ra_close_sites[1],ra_close_calls[1],(uintptr_t)ra_host_close))return 0;
  for(int j=0;j<2;j++)ra_original_close[j]=(RaCloseFn)(ra_image+ra_close_targets[j]);
@@ -830,6 +924,8 @@ static int ra_prepare_transport(void) {
     instead of faulting the whole ledger: no global resync hitch, no shutdown. */
  if(ra_transport)mxb_transport_set_adopt_foreign(ra_transport,1);
  if(ra_transport)(void)mxb_transport_pacing(ra_transport,ra_batch_tiles,ra_send_interval);
+ if(ra_log&&ra_bootstrap_gap&&!ra_transport&&(ra_bootstrap_attempts%10)==1){fprintf(ra_log,"{\"active\":true,\"kind\":\"bootstrap_try\",\"attempt\":%u,\"ms\":%llu,\"stage\":\"%s\",\"side\":%d,\"diff_cells\":%zu,\"first\":%zu,\"src\":%d,\"pub\":%d}\n",
+  (unsigned)ra_bootstrap_attempts,(unsigned long long)ra_bootstrap_elapsed,report.stage,report.side,mxb_transport_diag_diff,mxb_transport_diag_first,mxb_transport_diag_src,mxb_transport_diag_pub);fflush(ra_log);}
  if(ra_log&&!ra_bootstrap_gap){fprintf(ra_log,"{\"active\":true,\"kind\":\"transport_create\",\"generation\":%llu,\"stage\":\"%s\",\"side\":%d,\"succeeded\":%s}\n",(unsigned long long)ra_generation,report.stage,report.side,ra_transport?"true":"false");fflush(ra_log);}
  if(!ra_transport){ra_bootstrap_requested=!strcmp(report.stage,"host_source_mismatch")||!strcmp(report.stage,"stream_last_mismatch")||!strcmp(report.stage,"pending_not_zero")||!strcmp(report.stage,"dirty_flags_not_zero");ra_mark(RA_TRANSPORT,-1);return 0;}
  /* Prepare the solver only after the native streams agree. An earlier loading
@@ -902,6 +998,13 @@ API int MxDirtBorrowFrame(uint32_t abi,uint32_t bytes,MxDirtFrame *out){
  {MxdirtSoftView sv;if(mxdirt_session_soft_view(ra_session,&sv)&&sv.tile&&sv.serial){
    f.soft_cell_m=sv.cell;f.soft_thickness_m=sv.thickness;f.soft_tiles_x=sv.tiles_x;f.soft_tiles_z=sv.tiles_z;f.soft_tile_side=sv.tile_side;f.soft_unit_um=1000;
    f.soft_tile=sv.tile;f.soft_tile_serial=sv.serial;}}
+ /* live tyres: the sim's own contact frame (native units from the terrain centre) -> world metres */
+ {MxbDirtGhostSample ls[2];int lo[2]={0,0};const float nm=(float)ra_config.height.native_metres;
+  if(nm>0.f&&mxdirt_session_live_contacts(ra_session,ls,lo))for(int w=0;w<2;w++){if(!lo[w])continue;
+   const MxbDirtGhostSample *c=ls+w;float fl=hypotf(c->fwd[0],c->fwd[1]);if(!(fl>1e-4f)||!isfinite(c->x)||!isfinite(c->z))continue;
+   float v=fmaxf(0.f,c->speed),slip=c->slip_long,surf=v-slip,spin=surf>v+.05f?(surf-v)/fmaxf(surf,.5f):0.f,skid=slip>.05f&&v>.3f?fminf(1.f,slip/fmaxf(v,.5f)):0.f;
+   float *t=f.tyre[w];t[0]=f.origin_m[0]+.5f*f.span_x_m+c->x*nm;t[1]=f.origin_m[2]+.5f*f.span_z_m+c->z*nm;t[2]=c->fwd[0]/fl;t[3]=c->fwd[1]/fl;
+   t[4]=v;t[5]=fminf(1.f,spin);t[6]=skid;t[7]=c->width>0.f&&c->width<.5f?c->width:(w?.15f:.11f);f.tyre_mask|=1u<<w;}}
  *out=f;ok=1;
 end:SetLastError(previous);return ok;
 }
@@ -921,7 +1024,7 @@ static const RaSetting ra_settings[]={
  {"soil","extra_riders",0,0,15,&ra_extra_riders},{"soil","ghost_riders",0,0,MXDIRT_SESSION_MAX_GHOSTS,&ra_ghost_riders},
  {"soil","record_ghosts",1,0,1,&ra_record_ghosts},{"soil","follow_game_deformation",1,0,1,&ra_follow_game_deformation},
  {"soil","game_deformation_reference_percent",25,1,200,&ra_game_deformation_reference},{"soil","live_wear_percent",0,0,200,&ra_live_wear},
- {"terrain","batch_tiles",4,1,4,&ra_batch_tiles},{"terrain","send_interval_ms",0,0,250,&ra_send_interval},
+ {"soil","surface",0,0,4,&ra_surface},{"terrain","batch_tiles",4,1,4,&ra_batch_tiles},{"terrain","send_interval_ms",0,0,250,&ra_send_interval},
  {"online","online_wear",0,0,1,&ra_online_wear},{"debug","online_echo",0,0,1,&ra_online_echo},{"debug","dump_terrain",0,0,1,&ra_dump_terrain},
 };
 enum { RA_SETTINGS=sizeof(ra_settings)/sizeof(*ra_settings) };
@@ -950,31 +1053,34 @@ static void ra_settings_live(void){
  if(!ra_ini_changed())return;
  const unsigned depth=ra_dirt_sim_depth,firm=ra_dirt_sim_firmness,moist=ra_dirt_sim_moisture,bumps=ra_bumps_percent,rolling=ra_rolling_bumps_percent,
   hard=ra_hardness_percent,breakdown=ra_breakdown_percent,drying=ra_drying_percent,sweep=ra_sweep_percent,capture=ra_capture_percent,
-  cohesion=ra_cohesion_percent,clods=ra_clods_percent,gate=ra_live_gate,wear=ra_live_wear;
+  cohesion=ra_cohesion_percent,clods=ra_clods_percent,gate=ra_live_gate,wear=ra_live_wear,surface=ra_surface;
  const int ok=ra_settings_load();int applied=0;
  /* terrain pacing changes nothing in the simulation: live in every session, online too */
  if(ok&&ra_transport)(void)mxb_transport_pacing(ra_transport,ra_batch_tiles,ra_send_interval);
  if(ok&&ra_session&&!ra_online){
   MxdirtLiveSettings t;float *f=(float*)&t;for(unsigned k=0;k<sizeof(t)/sizeof(float);k++)f[k]=-1.f;
-  if(depth!=ra_dirt_sim_depth){float d=(float)ra_dirt_sim_depth; /* x this session's Deformation slider factor, as ra_game_depth */
-   if(!ra_game_deform_off&&ra_game_factor>0.f){d*=ra_game_factor;if(d<10.f)d=10.f;if(d>300.f)d=300.f;}t.depth_percent=d;}
-  if(firm!=ra_dirt_sim_firmness)t.firmness_percent=(float)ra_dirt_sim_firmness;
-  if(moist!=ra_dirt_sim_moisture)t.moisture_percent=(float)ra_dirt_sim_moisture;
-  if(bumps!=ra_bumps_percent)t.bumps_percent=(float)ra_bumps_percent;
+  /* a new surface resends everything it shifts; moisture then waters the track to the new value at once */
+  const int sf=surface!=ra_surface;
+  if(sf||depth!=ra_dirt_sim_depth){float d=(float)ra_dirt_sim_depth; /* x this session's Deformation slider factor, as ra_game_depth */
+   if(!ra_game_deform_off&&ra_game_factor>0.f)d*=ra_game_factor;t.depth_percent=ra_clampf(d*ra_surf_depth[ra_surface<5?ra_surface:0],10.f,300.f);}
+  if(sf||firm!=ra_dirt_sim_firmness)t.firmness_percent=ra_eff(1);
+  if(sf||moist!=ra_dirt_sim_moisture)t.moisture_percent=ra_eff(0);
+  if(sf||bumps!=ra_bumps_percent)t.bumps_percent=ra_surf_bump_pct();
   if(rolling!=ra_rolling_bumps_percent)t.rolling_bumps_percent=(float)ra_rolling_bumps_percent;
   if(hard!=ra_hardness_percent)t.hardness_percent=(float)ra_hardness_percent;
   if(breakdown!=ra_breakdown_percent)t.breakdown_percent=(float)ra_breakdown_percent;
-  if(drying!=ra_drying_percent)t.drying_percent=(float)ra_drying_percent;
+  if(sf||drying!=ra_drying_percent)t.drying_percent=ra_eff(2);
   if(sweep!=ra_sweep_percent)t.sweep_percent=(float)ra_sweep_percent;
   if(capture!=ra_capture_percent)t.capture_percent=(float)ra_capture_percent;
-  if(cohesion!=ra_cohesion_percent)t.cohesion_percent=(float)ra_cohesion_percent;
-  if(clods!=ra_clods_percent)t.clods_percent=(float)ra_clods_percent;
+  if(sf||cohesion!=ra_cohesion_percent)t.cohesion_percent=ra_eff(3);
+  if(sf||clods!=ra_clods_percent)t.clods_percent=ra_eff(4);
   applied=mxdirt_session_live_settings(ra_session,&t);
   if(gate!=ra_live_gate)applied=mxdirt_session_set_live_gate(ra_session,ra_live_gate)&&applied;
-  if(wear!=ra_live_wear)applied=mxdirt_session_set_live_wear(ra_session,(float)ra_live_wear)&&applied;
+  if(sf||wear!=ra_live_wear)applied=mxdirt_session_set_live_wear(ra_session,ra_surf_live_wear())&&applied;
+  if(sf)applied=mxdirt_session_set_surface(ra_session,(int)ra_surface)&&applied;
  }
- if(ra_log){fprintf(ra_log,"{\"kind\":\"live_settings\",\"read\":%d,\"session\":%d,\"applied_now\":%d,\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"live_wear_percent\":%u,\"live_gate_lines\":%u,\"prewear_riders\":%u,\"soft_layer_mm\":%u}\n",
-  ok,ra_session?1:0,applied,ra_dirt_sim_depth,ra_dirt_sim_firmness,ra_dirt_sim_moisture,ra_bumps_percent,ra_rolling_bumps_percent,ra_live_wear,ra_live_gate,ra_prewear_riders,ra_soft_mm);fflush(ra_log);}
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"live_settings\",\"read\":%d,\"session\":%d,\"applied_now\":%d,\"dirt_sim_depth_percent\":%u,\"dirt_sim_firmness_percent\":%u,\"dirt_sim_moisture_percent\":%u,\"braking_bumps_percent\":%u,\"rolling_bumps_percent\":%u,\"live_wear_percent\":%u,\"live_gate_lines\":%u,\"prewear_riders\":%u,\"soft_layer_mm\":%u,\"surface\":%u}\n",
+  ok,ra_session?1:0,applied,ra_dirt_sim_depth,ra_dirt_sim_firmness,ra_dirt_sim_moisture,ra_bumps_percent,ra_rolling_bumps_percent,ra_live_wear,ra_live_gate,ra_prewear_riders,ra_soft_mm,ra_surface);fflush(ra_log);}
 }
 API int Startup(char *savepath) {
  (void)savepath;ra_owner=GetCurrentThreadId();ra_image=(unsigned char *)GetModuleHandleW(NULL);
@@ -1015,7 +1121,7 @@ API void EventInit(void *data,int size) {
  ra_event_valid=0;ra_geom_valid=0;
  ra_close_mask=0;ra_close_generation=0;ra_native_retired=0;
  ra_bike=ra_candidate=0;ra_candidate_mask=ra_candidate_conflict=ra_fatal=ra_setup_attempted=ra_phase=0;ra_rebind=1;
- memset(ra_surface_frames,0,sizeof(ra_surface_frames));ra_game_deform_off=0;ra_transport_recoveries=ra_transport_recovery_failures=ra_transport_recovery_clock=0;ra_transport_recovery_budget=RA_TRANSPORT_RECOVERY_BURST;ra_transport_fault_have=0;
+ memset(ra_surface_frames,0,sizeof(ra_surface_frames));ra_game_deform_off=0;ra_transport_recoveries=ra_transport_recovery_failures=ra_transport_recovery_clock=0;ra_transport_recovery_budget=RA_TRANSPORT_RECOVERY_BURST;ra_transport_fault_have=0;ra_game_reset_last=0;ra_reset_check_due=0;
  InterlockedExchange(&ra_new_run,0);InterlockedExchange(&ra_foreign,0);ra_applied_token=ra_reset_token;
  memset(ra_physics,0,sizeof(ra_physics));
  if(!data||size<(int)sizeof(RaEvent)||ra_generation==UINT64_MAX)return;
@@ -1026,7 +1132,7 @@ API void EventInit(void *data,int size) {
  ra_flush_first_fault();memset(&ra_first_fault,0,sizeof(ra_first_fault));
  /* Both engine fixes must be in place before any session starts on this track. */
  const char *why="";int patched=mxdirt_patches_install(ra_image,&why);
- if(ra_log){fprintf(ra_log,"{\"kind\":\"engine_patches\",\"result\":\"%s\",\"reason\":\"%s\",\"track\":\"%s\",\"signed_add_rva\":\"1f61e6\",\"nonnegative_material_rva\":\"1f1f65\"}\n",
+ if(ra_log){fprintf(ra_log,"{\"kind\":\"engine_patches\",\"result\":\"%s\",\"reason\":\"%s\",\"track\":\"%s\",\"signed_add_rva\":\"1f6426\",\"nonnegative_material_rva\":\"1f21a5\"}\n",
   patched==MXDIRT_PATCHES_INSTALLED?"installed":patched==MXDIRT_PATCHES_FOREIGN?"present":"failed",why,ra_event_track);fflush(ra_log);}
  if(!patched){ra_mark(RA_PATCHES,0);ra_flush();return;} /* inactive for this track */
  ra_generation++;ra_event_valid=1;ra_mark(RA_EVENT,1);
@@ -1054,6 +1160,7 @@ API void RunStart(void){
     GetCurrentThreadId()==ra_owner&&!ra_inflight){
   ra_stopped_gap=1;if(!ra_prepare_transport()&&ra_bootstrap_requested)ra_bootstrap_arm();ra_stopped_gap=0;
  }
+ if(GetCurrentThreadId()==ra_owner&&!ra_inflight&&ra_session)(void)ra_game_reset_check("run_start");
  InterlockedIncrement(&ra_reset_token);InterlockedExchange(&ra_running,1);SetLastError(incoming);
 }
 API __declspec(noinline) void RunStop(void){

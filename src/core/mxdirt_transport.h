@@ -74,6 +74,8 @@ MxdirtTransport *mxb_transport_create(const MxbTransportConfig *,const MxbTransp
 /* First rejected startup predicate, captured synchronously on the owner.
    Strings are static; this report never borrows native memory. */
 typedef struct { const char *stage; int side; } MxbTransportCreateReport;
+/* Diagnostic: cells that differed on the last host_source / stream_last mismatch. */
+extern size_t mxb_transport_diag_diff,mxb_transport_diag_first;extern int32_t mxb_transport_diag_src,mxb_transport_diag_pub;
 MxdirtTransport *mxb_transport_create_report(const MxbTransportConfig *,const MxbTransportFacts *,MxbTransportCreateReport *);
 /* Parent's copied solver seed must match this prepared ledger exactly. Private
    copied arrays only; verified owner/gap facts required, no native write occurs. */

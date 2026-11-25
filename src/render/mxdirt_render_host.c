@@ -50,7 +50,7 @@ typedef struct {uint32_t event;uint64_t generation;} Lifecycle;
 /* MX Bikes' GL entry-point slots (rva of the stored function pointers) and the
    return addresses of its terrain draws through them (16-bit / 32-bit indices). */
 static const uint32_t slot_rva[3]={0x398f08,0x398f00,0x3216d0};
-static const uint32_t draw_returns[3][2]={{0x231fb5,0x231fe1},{0x232054,0x232080},{0x2320ca,0x2320e3}};
+static const uint32_t draw_returns[3][2]={{0x2321f5,0x232221},{0x232294,0x2322c0},{0x23230a,0x232323}};
 enum { TERRAIN_RETURN=MXDIRT_TS_TERRAIN_CALL+5, SURFACE_RELAY=0x100 };
 static unsigned char *image_base,*relay_page;static size_t image_size;
 static MxDirtTsCallPlan plan;static unsigned char call_owned,slot_owned[3];static void *slot_original[3];
@@ -349,8 +349,8 @@ static NOINLINE void APIENTRY elements_wrapper(GLenum m,GLsizei n,GLenum t,const
 }
 /* SHA-256 of the one supported mxbikes.exe (SUPPORTED_EXE.txt). */
 static int executable_hash(const wchar_t *path){
- static const unsigned char expected[32]={0x9e,0x79,0x2d,0x7a,0xed,0x1d,0xc4,0x0d,0xf1,0x1e,0xea,0x51,0xd1,0xa6,0xd0,0x51,
-  0x9d,0xae,0xc7,0xbe,0x2b,0x65,0x60,0x99,0x05,0xdf,0x8c,0x9d,0xe8,0x04,0xa2,0x91};
+ static const unsigned char expected[32]={0xfd,0xde,0x01,0x54,0xaf,0x35,0xea,0x3d,0x67,0x83,0xe6,0x74,0x10,0xe6,0x80,0x47,
+  0xf0,0x57,0xa6,0x37,0x59,0x87,0xb3,0x94,0xed,0x43,0xff,0xdc,0x06,0xe0,0x5d,0x5f};
  HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
  if(f==INVALID_HANDLE_VALUE)return 0;
  BCRYPT_ALG_HANDLE algorithm=NULL;BCRYPT_HASH_HANDLE hash=NULL;unsigned char result[32];static unsigned char bytes[65536];int ok=0;DWORD got;

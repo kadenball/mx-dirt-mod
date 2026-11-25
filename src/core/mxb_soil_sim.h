@@ -62,6 +62,12 @@ typedef struct {
 #define MXB_SIM_BAND .7f /* rut band half-width floor (cells); 1.9: .7 (was 1) - ruts .70 m wide vs Pro .60, were .80 */
 #endif
 typedef struct {uint8_t id;float c0,k,compact,repose_loose,repose_firm,lateral,roost,bump,dust;int sand;float scour,cmax;} MxbSoilMaterial;
+/* The MX material a pass works on once a surface is chosen: every soil, soft, sand and hardpack surface becomes
+   it (gravel and the rest stay); mud works as soil and is made wet by the host's moisture. */
+static inline int mxb_surface_material(int surface,int m){
+    if(surface<1||surface>4||!(m==4||m==5||m==7||m==10||m==11))return m;
+    return surface==1?10:surface==2?11:surface==3?5:4;
+}
 static inline MxbSoilMaterial mxb_soil_material(int mx,float base_c0){
     switch(mx){
     case 10:return (MxbSoilMaterial){2,fmaxf(.05f,base_c0-.08f),.75f,1.10f,1.00f,.90f,1.15f,1.2f,.9f,.8f,0,.010f,.78f};
@@ -91,6 +97,7 @@ typedef struct {
     float gain_lo,gain_hi;    /* v7.4: range of the bump/chop sinkage modulation (live .75..1.3) */
     float cohesion;           /* v6: scale on damp soil holding steep rut walls (0 off) */
     float clods;              /* v6: scale on roost landing as scattered clods (0 off) */
+    int surface;              /* chosen surface: 0 the track's own, 1 loam, 2 hardpack, 3 sand, 4 mud (mxb_surface_material) */
 } MxbSoilSimParams;
 typedef struct {
     uint32_t size,tiles_x,tiles_y;
@@ -285,7 +292,7 @@ static inline void mxb_soil_sim_wheel_pass(MxbSoilSim *s,unsigned wheel,const Mx
     /* soil under the tyre: average compaction and loose depth over a cell window */
     float cc,rr;mxb_ss_texel(s,X,Z,&cc,&rr);int c0=(int)lrintf(cc),r0=(int)lrintf(rr);
     if(c0<1||r0<1||c0>=(int)s->size-1||r0>=(int)s->size-1)return;
-    MxbSoilMaterial M=mxb_soil_material(w->material,p->compaction0);
+    MxbSoilMaterial M=mxb_soil_material(mxb_surface_material(p->surface,w->material),p->compaction0);
     size_t k0=(size_t)r0*s->size+c0;float c=s->comp[k0]?mxb_ss_c(s,k0):M.c0,L=s->loose[k0];
     float soft=fminf(1.f,L/.05f);float ce=c*(1.f-.55f*soft);
     float k=p->k_loose*powf(p->k_packed/p->k_loose,ce);

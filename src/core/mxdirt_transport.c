@@ -18,7 +18,7 @@ struct MxdirtTransport {
  MxbTransportTiming timing;
 };
 static MxdirtTransport *volatile transport_bound;
-static const char transport_sha[]="9e792d7aed1dc40df11eea51d1a6d0519daec7be2b65609905df8c9de804a291";
+static const char transport_sha[]="fdde0154af35ea3d6783e67410e68047f057a6375987b394ed43ffdc06e05d5f";
 static LONG atomic_read(volatile LONG *v){return InterlockedCompareExchange(v,0,0);}
 static LONGLONG ticks(void){LARGE_INTEGER q;QueryPerformanceCounter(&q);return q.QuadPart;}
 static double ticks_ms(LONGLONG d){static LONGLONG f;if(!f){LARGE_INTEGER q;QueryPerformanceFrequency(&q);f=q.QuadPart>0?q.QuadPart:1;}return 1000.*(double)d/(double)f;}
@@ -73,6 +73,11 @@ static void patch_plan(TransportPatch *p,void *address,const void *before,const 
 }
 static void relay(unsigned char *p,const void *fn){const unsigned char j[6]={0xff,0x25,0,0,0,0};memcpy(p,j,6);memcpy(p+6,&fn,8);}
 static int all_zero(const void *p,size_t n){const unsigned char *v=p;for(size_t i=0;i<n;i++)if(v[i])return 0;return 1;}
+size_t mxb_transport_diag_diff,mxb_transport_diag_first;int32_t mxb_transport_diag_src,mxb_transport_diag_pub;
+static void diag_count(const void *a,const int32_t *b,size_t n){
+ const int32_t *s=a;size_t d=0,first=0;for(size_t k=0;k<n;k++)if(s[k]!=b[k]){if(!d++)first=k;}
+ mxb_transport_diag_diff=d;mxb_transport_diag_first=first;mxb_transport_diag_src=d?s[first]:0;mxb_transport_diag_pub=d?b[first]:0;
+}
 static int create_reject(MxbTransportCreateReport *r,const char *stage,int side){
  if(r)*r=(MxbTransportCreateReport){stage,side};return 0;
 }
@@ -100,8 +105,10 @@ static int clean_binding_report(MxdirtTransport *t,MxbTransportCreateReport *r){
   if(!mxb_pace_span(&t->context,last,t->cells*4,0))return create_reject(r,"stream_last_span",side);
   /* The client sends increments; the host sends full DFM. A stopped, fully
      converged nonzero DFM is a valid initial surface, not unfinished work. */
-  if(side?memcmp(source,t->published,t->cells*4):!all_zero(source,t->cells*4))return create_reject(r,side?"host_source_mismatch":"pending_not_zero",side);
-  if(memcmp(last,t->published,t->cells*4))return create_reject(r,"stream_last_mismatch",side);
+  if(side?memcmp(source,t->published,t->cells*4):!all_zero(source,t->cells*4)){
+   if(side)diag_count(source,t->published,t->cells);
+   return create_reject(r,side?"host_source_mismatch":"pending_not_zero",side);}
+  if(memcmp(last,t->published,t->cells*4)){diag_count(last,t->published,t->cells);return create_reject(r,"stream_last_mismatch",side);}
   const int16_t *peer_base=(const int16_t*)mxb_pace_ptr(grid+0x748),*peer_height=(const int16_t*)mxb_pace_ptr(grid+0x750);
   if(!mxb_pace_span(&t->context,peer_base,t->cells*2,0)||!mxb_pace_span(&t->context,peer_height,t->cells*2,0))return create_reject(r,"peer_height_spans",side);
   if(memcmp(peer_base,t->base,t->cells*2))return create_reject(r,"peer_base_mismatch",side);
@@ -138,8 +145,8 @@ MxdirtTransport *mxb_transport_create_report(const MxbTransportConfig *c,const M
  create_reject(r,"publisher_plan",-1);if(!mxb_publication_call_plan(&t->context,(uintptr_t)c->near_code,&t->publisher_plan))goto bad;
  create_reject(r,"receive_plan",-1);if(!mxb_publication_receive_plan(&t->context,(uintptr_t)c->near_code+128,&t->receive_plan))goto bad;
  create_reject(r,"excavation_plan",-1);
- if(!mxb_pace_span(&t->context,c->exe+0x1a4d8f,5,0)||!mxb_pace_span(&t->context,c->exe+0x1bbda0,12,0)||
-  !mxb_excavation_call_plan((uintptr_t)c->exe,(uintptr_t)c->near_code+256,1,c->exe+0x1a4d8f,c->exe+0x1bbda0,&t->excavation_plan))goto bad;
+ if(!mxb_pace_span(&t->context,c->exe+0x1a4e2f,5,0)||!mxb_pace_span(&t->context,c->exe+0x1bbda0,12,0)||
+  !mxb_excavation_call_plan((uintptr_t)c->exe,(uintptr_t)c->near_code+256,1,c->exe+0x1a4e2f,c->exe+0x1bbda0,&t->excavation_plan))goto bad;
  for(int side=0;side<2;side++){create_reject(r,"pacing_plan",side);if(!mxb_pace_build(&t->context,side,(uintptr_t)c->near_code+384+128*side,&t->pacing_plan[side]))goto bad;}
  t->original_publisher=c->fixture_publisher?c->fixture_publisher:(MxbNativePublisher)t->publisher_plan.original_target;
  t->original_replace=c->fixture_replace?c->fixture_replace:(MxbNativeReplace)t->receive_plan.original_target;

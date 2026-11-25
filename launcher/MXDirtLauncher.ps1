@@ -68,6 +68,8 @@ $LiveLevels=[ordered]@{ 'Realistic (default)'=0; 'Medium (faster wear)'=100; 'Ar
 $ArcadeShown=@{ dirt_sim_depth_percent=80; dirt_sim_moisture_percent=45; rolling_bumps_percent=30; soft_layer_mm=100; dirt_strength=160 }
 $ArcadeHidden=[ordered]@{ rut_capture_percent=150; wall_cohesion_percent=150; packed_hardness_percent=70; braking_bumps_percent=60; drying_percent=0; roost_clods_percent=200 }
 $ArcadeLevel='Arcade (hero dirt)'
+# [soil] surface: the soil type every ridden surface becomes (applies live)
+$Surfaces=[ordered]@{ 'Track default'=0; 'Loam (soft dirt)'=1; 'Hardpack'=2; 'Sand'=3; 'Mud'=4 }
 $Num=@(
   @('active','soil','prewear_spread_cm','Wear spread across track (cm)',20,500,140,'How far the virtual riders spread from your lines. Lower = fewer, deeper main lines.'),
   @('active','soil','dirt_sim_depth_percent','Rut depth (%)',10,300,60,'How deep tyres cut. Also follows the game''s erode slider.'),
@@ -112,12 +114,21 @@ $wear=New-Object Windows.Forms.ComboBox;$wear.DropDownStyle='DropDownList';$wear
 foreach($k in $WearLevels.Keys){[void]$wear.Items.Add($k)}
 $live=New-Object Windows.Forms.ComboBox;$live.DropDownStyle='DropDownList';$live.Width=220
 foreach($k in $LiveLevels.Keys){[void]$live.Items.Add($k)}
+$surface=New-Object Windows.Forms.ComboBox;$surface.DropDownStyle='DropDownList';$surface.Width=220
+foreach($k in $Surfaces.Keys){[void]$surface.Items.Add($k)}
 Row 'Starting wear' $wear 'Virtual riders ride your recorded laps before you start. "After moto 1" matches the Maryland Pro track. Needs at least one recorded lap on the track. A track with saved wear keeps it - reset the track to wear it again at a new level.'
 $ctl=@{}
 foreach($n in $Num){ if($n[1] -eq 'renderer' -and -not $hdrR){ Header 'Look'; $hdrR=$true } elseif($n[2] -eq 'dirt_sim_depth_percent'){
         Header 'Wear while you ride'
         Row 'Wear from your laps' $live 'How fast your own riding wears the track. Realistic: slow one-rider wear, your line packs in and bumps stay small. Medium: about 15 of your laps wear it like the Practice level. Arcade: hero dirt - wear builds twice as fast, deep grippy ruts and tall berms you can rail, less chop, stays damp all session (also sets rut depth, moisture, bumps, soft layer, look and starting wear).'
-        Header 'Dirt' }
+        Header 'Dirt'
+        Row 'Surface' $surface ('What the ground is made of. Changes how ruts form and how the dirt looks, and applies live.'+"`n"+
+  'Track default: each part of the track keeps its own surface (dirt, sand, hardpack).'+"`n"+
+  'Loam: soft, dark, crumbly dirt. Ruts build fast and hold you.'+"`n"+
+  'Hardpack: dry and slick. Shallow ruts, sharp braking bumps, dusty.'+"`n"+
+  'Sand: deep, wide ruts whose walls fall in. Barely packs down.'+"`n"+
+  'Mud: very wet. Deep sticky ruts, dark and shiny, dries very slowly.'+"`n"+
+  'Moisture and Track firmness below still fine-tune it.') }
     $u=New-Object Windows.Forms.NumericUpDown;$u.Minimum=$n[4];$u.Maximum=$n[5];$u.Width=80;$ctl[$n[2]]=$u;Row $n[3] $u $n[7] }
 foreach($c in $Chk){ $b=New-Object Windows.Forms.CheckBox;$b.Text=$c[3];$b.AutoSize=$true;$ctl[$c[2]]=$b;$tbl.Controls.Add($b);$tbl.SetColumnSpan($b,2) }
 
@@ -162,6 +173,8 @@ function Load-All {
     $ln=($LiveLevels.Keys | Where-Object { $LiveLevels[$_] -eq $lv } | Select-Object -First 1)
     if(-not $ln){ $ln="Custom ($lv %)"; if(-not $live.Items.Contains($ln)){[void]$live.Items.Add($ln)} }
     $live.SelectedItem=$ln;$script:LastLive=$ln
+    $sv=[int](Get-Val $L.active 'soil' 'surface' '0'); $sn=($Surfaces.Keys | Where-Object { $Surfaces[$_] -eq $sv } | Select-Object -First 1)
+    $surface.SelectedItem=if($sn){$sn}else{'Track default'}
     foreach($n in $Num){ $v=[int](Get-Val $L[$n[0]] $n[1] $n[2] "$($n[6])"); $ctl[$n[2]].Value=[Math]::Max($n[4],[Math]::Min($n[5],$v)) }
     foreach($c in $Chk){ $ctl[$c[2]].Checked=(Get-Val $L[$c[0]] $c[1] $c[2] "$($c[4])") -eq '1' }
     $script:Loading=$false
@@ -181,6 +194,7 @@ function Save-All {
     Set-Val $L.active 'soil' 'prewear_riders' "$r"
     $lw=if($LiveLevels.Contains("$($live.SelectedItem)")){$LiveLevels["$($live.SelectedItem)"]}else{[int]("$($live.SelectedItem)" -replace '\D','')}
     Set-Val $L.active 'soil' 'live_wear_percent' "$lw"
+    Set-Val $L.active 'soil' 'surface' "$($Surfaces["$($surface.SelectedItem)"])"
     # Arcade's ini-only settings: written with Arcade, back to the defaults when an Arcade ini leaves it
     if("$($live.SelectedItem)" -eq $ArcadeLevel){ foreach($k in $ArcadeHidden.Keys){ Set-Val $L.active 'soil' $k "$($ArcadeHidden[$k])" } }
     else{ $was=$true;foreach($k in $ArcadeHidden.Keys){ if((Get-Val $L.active 'soil' $k '100') -ne "$($ArcadeHidden[$k])"){$was=$false} }
@@ -199,7 +213,7 @@ function Save-All {
         $script:LoadedRiders=$r
         if([Windows.Forms.MessageBox]::Show("Tracks you already rode keep their saved wear.`n`nReset '$($track.SelectedItem)' so it starts at the new level?",'New wear level','YesNo','Question') -eq 'Yes'){ Reset-Track $false } } }
 
-function Apply-Recommended { $wear.SelectedItem='After moto 1 (Pro look)'; $live.SelectedItem='Realistic (default)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
+function Apply-Recommended { $surface.SelectedItem='Track default'; $wear.SelectedItem='After moto 1 (Pro look)'; $live.SelectedItem='Realistic (default)'; foreach($n in $Num){ $ctl[$n[2]].Value=$n[6] }; foreach($c in $Chk){ $ctl[$c[2]].Checked=$c[4] -eq 1 }
     $status.ForeColor=[Drawing.Color]::DimGray; $status.Text='Recommended settings filled in - press Save.' }
 $rec.Add_Click({ Apply-Recommended })
 # picking Arcade fills in its settings; leaving it puts the recommended ones back
@@ -217,7 +231,10 @@ function Reset-Track($ask){
     $n="$($track.SelectedItem)"; $p=$TrackPath[$n]; if(-not $p){return}
     if($ask -and [Windows.Forms.MessageBox]::Show("Start '$n' fresh next time?`n`nIts saved wear is moved to:`n$BackupDir\track-wear",'Reset track wear','OKCancel','Question') -ne 'OK'){return}
     $d="$BackupDir\track-wear";New-Item -ItemType Directory -Force $d | Out-Null
-    Move-Item $p "$d\$n-$(Get-Date -Format 'yyyyMMdd-HHmmss').dfm"
+    $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'
+    Move-Item $p "$d\$n-$stamp.dfm"
+    # the mod's own saves for this track (top layer, soil, and each surface's kept wear) go with it
+    $soft="$Plugins\mx_dirt_soft\$n"; if(Test-Path $soft){ Move-Item $soft "$d\$n-$stamp-mod" }
     Load-Tracks; $status.ForeColor=[Drawing.Color]::DarkGreen; $status.Text="'$n' will start fresh (backup kept)." }
 $resetTrack.Add_Click({ Reset-Track $true })
 # live: with the game running, a change is saved (and so applied) half a second after the last edit
@@ -226,7 +243,7 @@ $applyTimer.Add_Tick({ $applyTimer.Stop(); if($liveChk.Checked -and (Game-Runnin
 function Touch { if($script:Loading){return}; if($liveChk.Checked -and (Game-Running)){ $applyTimer.Stop(); $applyTimer.Start() } }
 foreach($n in $Num){ $ctl[$n[2]].Add_ValueChanged({ Touch }) }
 foreach($c in $Chk){ $ctl[$c[2]].Add_CheckedChanged({ Touch }) }
-$wear.Add_SelectedIndexChanged({ Touch }); $live.Add_SelectedIndexChanged({ Touch }); $liveChk.Add_CheckedChanged({ Touch })
+$wear.Add_SelectedIndexChanged({ Touch }); $surface.Add_SelectedIndexChanged({ Touch }); $live.Add_SelectedIndexChanged({ Touch }); $liveChk.Add_CheckedChanged({ Touch })
 $timer=New-Object Windows.Forms.Timer;$timer.Interval=3000;$timer.Add_Tick({ if($status.ForeColor -ne [Drawing.Color]::DarkGreen){Update-Status} });$timer.Start()
 
 # A window taller than the screen scrolls, so the buttons at the bottom are never out of reach.

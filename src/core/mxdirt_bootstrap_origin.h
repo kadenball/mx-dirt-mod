@@ -16,7 +16,7 @@ typedef struct {
 } MxbBootstrapOrigin;
 static inline int mxb_bootstrap_code(MxbBootstrapRead read,void *u,const MxbBootstrapOrigin *q){
  if(!read||!q||!q->image||q->image_bytes<0xa1e4dc||q->image_bytes>UINT64_MAX-q->image||
-  !q->verified_sha256||strcmp(q->verified_sha256,"9e792d7aed1dc40df11eea51d1a6d0519daec7be2b65609905df8c9de804a291"))return 0;
+  !q->verified_sha256||strcmp(q->verified_sha256,"fdde0154af35ea3d6783e67410e68047f057a6375987b394ed43ffdc06e05d5f"))return 0;
  unsigned char b[1536];
  for(size_t j=0;j<sizeof(mxb_bootstrap_code_spans)/sizeof(*mxb_bootstrap_code_spans);j++){
   const MxbBootstrapCodeSpan *p=&mxb_bootstrap_code_spans[j];
@@ -25,7 +25,7 @@ static inline int mxb_bootstrap_code(MxbBootstrapRead read,void *u,const MxbBoot
   if(h!=p->fnv)return 0;
  }
  static const unsigned char native[5]={0xe8,0xba,0xf9,0xff,0xff};
- return read(u,q->image+0x2a6241,b,5)==1&&!memcmp(b,q->owned_receive_call?q->owned_receive_call:native,5);
+ return read(u,q->image+0x2a6481,b,5)==1&&!memcmp(b,q->owned_receive_call?q->owned_receive_call:native,5);
 }
 static inline int mxb_bootstrap_immediate(MxbBootstrapRead read,void *u,uint64_t image){
  int32_t client,host,peers,pause,queued,completed,cursor,total;uint64_t api;
@@ -36,13 +36,13 @@ static inline int mxb_bootstrap_immediate(MxbBootstrapRead read,void *u,uint64_t
   read(u,image+0x566c48,&api,8)!=1)return 0;
  /* count is historical after completion; never demand it be reset to zero.
     No-queue and completed-positive-queue are the only accepted forms. */
- return client==7&&host>=3&&peers==1&&pause==0&&queued==0&&api==image+0x120cc0&&
+ return client==7&&host>=3&&peers==1&&pause==0&&queued==0&&api==image+0x120c40&&
   ((cursor==0&&total==0)||(total>0&&cursor>=total&&completed==1));
 }
 static inline int mxb_bootstrap_ancestry(MxbBootstrapRead read,void *u,const MxbBootstrapOrigin *q){
  if(!q||!q->return_slot||(q->return_slot&7)||!q->stack_low||q->stack_low>=q->stack_high||
   q->return_slot<q->stack_low||q->return_slot>=q->stack_high||q->stack_high-q->return_slot<0xa8)return 0;
- static const unsigned offsets[3]={0,0x70,0xa0},returns[3]={0x2a6246,0x2a9c02,0x135d75};
+ static const unsigned offsets[3]={0,0x70,0xa0},returns[3]={0x2a6486,0x2a9e42,0x135d45};
  for(unsigned j=0;j<3;j++){uint64_t v;if(read(u,q->return_slot+offsets[j],&v,8)!=1||v!=q->image+returns[j])return 0;}
  return mxb_bootstrap_code(read,u,q);
 }

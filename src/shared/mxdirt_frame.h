@@ -32,8 +32,11 @@
    texels, rows with +z, 2 bytes each {128 + height/soft_unit_um relative to the
    untouched layer top, bit7 crisp tread | bits 6..5 freshness (3 just made .. 0
    settled) | bits 4..0 travel angle mod pi in 1/32 of pi} (ABI 3);
-   a NULL tile is untouched {128,0}. soft_tile_serial[t] changes when tile t does. */
-enum { MXDIRT_FRAME_ABI = 3 };
+   a NULL tile is untouched {128,0}. soft_tile_serial[t] changes when tile t does.
+   Live tyres (ABI 4, display only): the player's two contacts of the latest step, bit w of tyre_mask set when
+   wheel w (0 front, 1 rear) touches the ground. tyre[w] = {x, z (world m), forward x, z (unit), ground speed
+   m/s, drive spin 0..1, brake skid 0..1, tyre width m}. */
+enum { MXDIRT_FRAME_ABI = 4 };
 typedef struct {
     uint32_t abi, bytes, owner_thread, reserved;
     uint64_t generation;          /* changes on every track load */
@@ -47,6 +50,7 @@ typedef struct {
     float soft_cell_m, soft_thickness_m;
     uint32_t soft_tiles_x, soft_tiles_z, soft_tile_side, soft_unit_um; /* height step, micrometres (1000) */
     const uint8_t *const *soft_tile; const uint32_t *soft_tile_serial;
+    uint32_t tyre_mask, tyre_reserved; float tyre[2][8];
 } MxDirtFrame;
 /* Returns 1 and fills *out, or 0 (core not live / wrong thread / abi or bytes mismatch). */
 typedef int (*MxDirtBorrowFrameFn)(uint32_t abi, uint32_t bytes, MxDirtFrame *out);

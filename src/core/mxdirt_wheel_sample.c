@@ -12,7 +12,7 @@ int mxb_wheel_sample(MxbWheelRead read,void *user,const MxbWheelSampleRequest *r
     if(!r||!out||!metadata||!r->image_base||!r->bike||!r->generation||!r->sequence||
        r->wheel<0||r->wheel>1||r->result<0||r->result>1||r->terrain_id<1||r->terrain_id>2||
        !isfinite(r->dt)||r->dt<=0.f||r->dt>.1f||r->image_base>UINT64_MAX-0x56e5e8)return 0;
-    const uint64_t offset=0x60f8+(uint64_t)r->wheel*0xe310;
+    const uint64_t offset=0x6c30+(uint64_t)r->wheel*0xe310;
     if(r->bike>UINT64_MAX-offset)return 0;uint64_t w=r->bike+offset;
     MxbWheelSampleMetadata m;memset(&m,0,sizeof(m));
     uint64_t grid=r->image_base+0x568488+(uint64_t)(r->terrain_id-1)*0x6160;

@@ -3,12 +3,12 @@
 #include <math.h>
 #include <limits.h>
 
-enum { CALL_RVA=0x135d70, TARGET_RVA=0x2a9bd0, STEP_RVA=0x396b48,
+enum { CALL_RVA=0x135d40, TARGET_RVA=0x2a9e10, STEP_RVA=0x396b48,
     SKIP_RVA=0x3d7fac, STATE_RVA=0x598904, REM30_RVA=0x5987f8,
-    ADVANCE_RVA=0x5987fc, WHEEL_BASE=0x60f8, WHEEL_STRIDE=0xe310 };
-static const char image_sha[]="9e792d7aed1dc40df11eea51d1a6d0519daec7be2b65609905df8c9de804a291";
-static const unsigned char call_window[]={0x8b,0xcb,0xe8,0x5b,0x3e,0x17,0x00,
-    0x83,0x3d,0xe8,0x00,0x43,0x00,0x00,0x74,0x17};
+    ADVANCE_RVA=0x5987fc, WHEEL_BASE=0x6c30, WHEEL_STRIDE=0xe310 }; /* 2026-11-23 build: the bike gained 0xb38 bytes before its wheels (was 0x60f8) */
+static const char image_sha[]="fdde0154af35ea3d6783e67410e68047f057a6375987b394ed43ffdc06e05d5f";
+static const unsigned char call_window[]={0x8b,0xcb,0xe8,0xcb,0x40,0x17,0x00,
+    0x83,0x3d,0x18,0x01,0x43,0x00,0x00,0x74,0x17};
 static const unsigned char target_prefix[]={0x40,0x53,0x48,0x83,0xec,0x20};
 static int add_address(uint64_t a,uint64_t n,uint64_t *out) {
     if(n>UINT64_MAX-a)return 0;*out=a+n;return 1;

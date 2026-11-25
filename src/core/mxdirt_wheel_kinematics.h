@@ -5,7 +5,7 @@
 #include <string.h>
 
 /* MX Bikes body layout of the one supported mxbikes.exe (SHA-256 pinned by the plugin).
-   B is bike; W = B + 0x60f8 + index * 0xe310 (front=0, rear=1).
+   B is bike; W = B + 0x6c30 + index * 0xe310 (front=0, rear=1).
    The caller must capture the pointed-to body, not merely this pointer.
    These functions never read another process or modify game state. */
 enum {

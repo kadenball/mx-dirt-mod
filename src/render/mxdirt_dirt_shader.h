@@ -42,10 +42,10 @@
 #define MXDIRT_SOFT_FADE_AREA 1
 #endif
 #ifndef MXDIRT_SOFT_FADE_START
-#define MXDIRT_SOFT_FADE_START 3.
+#define MXDIRT_SOFT_FADE_START 8.
 #endif
 #ifndef MXDIRT_SOFT_FADE_END
-#define MXDIRT_SOFT_FADE_END 14.
+#define MXDIRT_SOFT_FADE_END 40.
 #endif
 /* 1: the fine detail (clods, crumbs, knob prints) fades by the pixel's ground area and over a wider range;
    0: by its longest side, the ranges of 1.6 (comparison builds only). */
@@ -62,25 +62,90 @@ static const char mxdirt_vertex_shader[]=
  "layout(location=0) in vec2 cell;"
  "uniform sampler2D heights;uniform mat4 view,projection;uniform vec3 texel0,camera;uniform vec2 spacing,shift;uniform float height_scale;"
  "out vec2 gv;out vec3 wv;"
- "void main(){ivec2 t=ivec2(cell)+ivec2(" MXDIRT_STR(MXDIRT_MARGIN) ");float h=texelFetch(heights,(t+ivec2(shift))%ivec2(" MXDIRT_STR(MXDIRT_SIDE) "),0).r*height_scale;"
+ "void main(){ivec2 t=ivec2(cell)+ivec2(" MXDIRT_STR(MXDIRT_MARGIN) ");vec2 hh=texelFetch(heights,(t+ivec2(shift))%ivec2(" MXDIRT_STR(MXDIRT_SIDE) "),0).rg*height_scale;float h=hh.r;"
  "vec3 p=vec3(texel0.x+float(t.x)*spacing.x,texel0.y+h,texel0.z+float(t.y)*spacing.y);"
- "p.y+=.004+.001*distance(p,camera);gv=vec2(t)+.5;wv=p;gl_Position=projection*view*vec4(p,1);}";
+ "float d=distance(p,camera);p.y+=.004+.001*d;gv=vec2(t)+.5;wv=p;"
+ /* depth tolerance along the view ray. The game draws far ground - and all of it while the bike is high in
+    the air - with a coarser mesh that smooths the ruts away; the pass, at full detail, failed the depth test
+    under it and the whole look appeared only where the fine mesh came back, 1-3 m ahead (under the bike at
+    speed, after a landing). It is drawn pulled toward the camera by more than the coarse mesh can differ:
+    distance and the dug depth here. Within ~2 m of the camera (the rider's own bike, drawn before the
+    terrain on the bike camera) the pull stays at 6 cm. Same pixel, only the depth moves. */
+ "float pull=min(.04+.015*d+.8*max(hh.g-hh.r,0.),mix(.06,1.5,smoothstep(2.,4.,d)));"
+ "gl_Position=projection*view*vec4(p+(camera-p)/max(d,1e-3)*pull,1);}";
 static const char mxdirt_fragment_version[]="#version 330 compatibility\n";
 static const char mxdirt_fragment_sink[]="#define SINK 1\n";
+static const char mxdirt_fragment_mesh[]="#define MESH 1\n";
+/* Real 3D top layer (soft_mesh): a camera-centred clipmap - 4 levels of 321x321 vertices, cells 2.5, 5, 10 and
+   20 cm (+-4, 8, 16 and 32 m) - lifted to the ground (heights window) plus the soft layer's own height, which
+   eases flat over the last 6 m before mesh_r, where the parallax pass carries on. A level skips the square
+   its finer neighbour covers (inner_in < 1, by whole coarse cells). Coarser levels read the layer through a
+   2x2 box of samples so a trench narrower than a cell does not alias. */
+static const char mxdirt_mesh_vertex_shader[]=
+ "#version 330 compatibility\n"
+ "layout(location=0) in vec3 cl;"
+ "uniform sampler2D heights,soft;uniform mat4 view,projection;uniform vec3 texel0,camera;uniform vec2 spacing,shift,soft_origin;uniform vec4 soft_window;"
+ "uniform float height_scale,soft_cell,soft_unit,soft_depth,mesh_r;uniform int soft_on;"
+ "out vec2 gv;out vec3 wv;out vec3 ws_in;out float inner_in;"
+ "const float SIDE=float(" MXDIRT_STR(MXDIRT_SIDE) ");"
+ "uniform vec4 tyre_p0,tyre_p1,tyre_s0,tyre_s1;"
+ "float LIVE1(vec2 l,vec4 P,vec4 S){if(S.w<=0.)return 0.;vec2 d=l-P.xy,f=P.zw,n=vec2(-f.y,f.x);float u=dot(d,f),v=dot(d,n);"
+ "if(abs(u)>.7||abs(v)>.4)return 0.;"
+ "float k=clamp(soft_depth/.06,.5,1.5),hw=.5*S.w,L=.08,mv=clamp(S.x/2.,0.,1.),h=0.;"
+ /* pressed under the patch, the soil squeezed up along both sides */
+ "float inl=1.-smoothstep(L-.02,L+.02,abs(u)),acr=1.-smoothstep(hw-.015,hw+.01,abs(v));h-=.35*soft_depth*inl*acr;"
+ "h+=.024*k*inl*exp(-pow((abs(v)-hw-.035)/.026,2.));"
+ /* bow wave ahead, a shoved mound when the tyre skids */
+ "float ah=exp(-pow((u-L-.05-.05*S.z)/(.04+.04*S.z),2.))*(1.-smoothstep(hw,hw+.05,abs(v)));h+=(.012*mv+.05*S.z)*k*ah;"
+ /* wheelspin: a scooped trough right behind the patch and the soil thrown back into a lip behind it */
+ "float bh=(1.-smoothstep(hw-.01,hw+.03,abs(v)));h-=.03*S.y*k*smoothstep(-L-.18,-L-.05,u)*(1.-smoothstep(-L-.02,-L+.01,u))*bh;"
+ "h+=.045*S.y*k*exp(-pow((u+L+.32)/.10,2.))*(1.-smoothstep(hw,hw+.08,abs(v)));"
+ "return h*(1.-smoothstep(.45,.7,abs(u)));}"
+ "float LIVE(vec2 l){return LIVE1(l,tyre_p0,tyre_s0)+LIVE1(l,tyre_p1,tyre_s1);}"
+ "float SH(vec2 l){return (textureLod(soft,l/(soft_cell*2048.),0.).r*255.-128.)*soft_unit+LIVE(l);}"
+ "void main(){float lv=cl.z,c=.025*exp2(lv);vec2 snap=floor(camera.xz/(2.*c))*2.*c,xz=snap+cl.xy*c;"
+ "vec2 g=(xz-texel0.xz)/spacing+.5;float hy=textureLod(heights,(g+shift)/SIDE,0.).r*height_scale;"
+ "vec3 gp=vec3(xz.x,texel0.y+hy,xz.y);float h=0.;"
+ "if(soft_on!=0){vec2 sl=xz-soft_origin;float se=min(min(sl.x-soft_window.x,soft_window.z-sl.x),min(sl.y-soft_window.y,soft_window.w-sl.y));"
+ "float q=.25*c;h=lv<.5?SH(sl):.25*(SH(sl+vec2(q,q))+SH(sl+vec2(-q,q))+SH(sl+vec2(q,-q))+SH(sl+vec2(-q,-q)));"
+ "h*=smoothstep(.5,10.,se)*(1.-smoothstep(mesh_r-6.,mesh_r,distance(gp,camera)));}"
+ "if(lv>.5){float ci=.5*c;vec2 si=floor(camera.xz/(2.*ci))*2.*ci,r=abs(xz-si)/(160.*ci);inner_in=max(r.x,r.y);}else inner_in=2.;"
+ "gv=g;wv=gp;ws_in=gp+vec3(0.,h,0.);gl_Position=projection*view*vec4(ws_in,1.);}";
 static const char mxdirt_fragment_body[]=
  "uniform sampler2D heights,background,clods;uniform ivec2 viewport_origin;uniform mat4 view,projection;uniform vec3 texel0;"
  "uniform vec2 spacing,fade,shift;uniform vec4 bounds,ramp;uniform vec3 camera;uniform float height_scale,strength,base_grain,relief,soft_lift;"
- "uniform sampler2D state;uniform int state_on;"
+ "uniform sampler2D state;uniform int state_on,surface;"
  "uniform sampler2D soft;uniform int soft_on,soft_mode;uniform vec2 soft_origin;uniform vec4 soft_window;uniform float soft_cell,soft_depth,soft_unit;"
  /* perf: one texel per soft tile slot (64x64, wraps like the window): 0 = no soft texel within one tile
     (soft_tile metres) of any point of this tile was ever touched. There the layer is flat at its rest
     height and none of its ~30 samples per pixel are taken; the result is the same. */
  "uniform sampler2D soft_occ;uniform float soft_tile;"
  "in vec2 gv;in vec3 wv;layout(location=0) out vec4 color;"
+ "uniform sampler2D ndepth;uniform float mesh_r;uniform int mesh_clear;"
+ "\n#ifdef MESH\n" "in vec3 ws_in;in float inner_in;" "\n#endif\n"
  "const float SIDE=float(" MXDIRT_STR(MXDIRT_SIDE) ");"
  "vec2 H(vec2 c){return texture(heights,(c+shift)/SIDE).rg*height_scale;}"
  /* soft top layer height (m, relative to the untouched layer top) at a local point; the window wraps every 2048 texels */
- "float SH(vec2 l){return (texture(soft,l/(soft_cell*2048.)).r*255.-128.)*soft_unit;}"
+ /* live tyres (soft_live_tyres): the layer pushed around each tyre this frame - pressed under it, squeezed up
+    beside it, a bow wave ahead (a mound when braking), a scooped trough and a thrown-back lip under wheelspin.
+    Part of the layer height, so the mesh, its lighting and its shadows all move with the tyre. */
+ "uniform vec4 tyre_p0,tyre_p1,tyre_s0,tyre_s1;"
+ "float LIVE1(vec2 l,vec4 P,vec4 S){if(S.w<=0.)return 0.;vec2 d=l-P.xy,f=P.zw,n=vec2(-f.y,f.x);float u=dot(d,f),v=dot(d,n);"
+ "if(abs(u)>.7||abs(v)>.4)return 0.;"
+ "float k=clamp(soft_depth/.06,.5,1.5),hw=.5*S.w,L=.08,mv=clamp(S.x/2.,0.,1.),h=0.;"
+ /* pressed under the patch, the soil squeezed up along both sides */
+ "float inl=1.-smoothstep(L-.02,L+.02,abs(u)),acr=1.-smoothstep(hw-.015,hw+.01,abs(v));h-=.35*soft_depth*inl*acr;"
+ "h+=.024*k*inl*exp(-pow((abs(v)-hw-.035)/.026,2.));"
+ /* bow wave ahead, a shoved mound when the tyre skids */
+ "float ah=exp(-pow((u-L-.05-.05*S.z)/(.04+.04*S.z),2.))*(1.-smoothstep(hw,hw+.05,abs(v)));h+=(.012*mv+.05*S.z)*k*ah;"
+ /* wheelspin: a scooped trough right behind the patch and the soil thrown back into a lip behind it */
+ "float bh=(1.-smoothstep(hw-.01,hw+.03,abs(v)));h-=.03*S.y*k*smoothstep(-L-.18,-L-.05,u)*(1.-smoothstep(-L-.02,-L+.01,u))*bh;"
+ "h+=.045*S.y*k*exp(-pow((u+L+.32)/.10,2.))*(1.-smoothstep(hw,hw+.08,abs(v)));"
+ "return h*(1.-smoothstep(.45,.7,abs(u)));}"
+ "float LIVE(vec2 l){return LIVE1(l,tyre_p0,tyre_s0)+LIVE1(l,tyre_p1,tyre_s1);}"
+ "float SH(vec2 l){return (texture(soft,l/(soft_cell*2048.)).r*255.-128.)*soft_unit+LIVE(l);}"
+ /* the untouched-tile shortcut must not skip the ground right around a live tyre */
+ "bool NEARTY(vec2 l){return (tyre_s0.w>0.&&distance(l,tyre_p0.xy)<.9)||(tyre_s1.w>0.&&distance(l,tyre_p1.xy)<.9);}"
  /* knob blocks of a tread pressed along f: rows every 5.2 cm, 3 cm blocks across, staggered */
  "float kblock(vec2 q,vec2 f,vec2 n){float b=floor(dot(q,n)/.03),s=dot(q,f)/.052+.5*mod(b,2.),c=fract(dot(q,n)/.03);"
  "return smoothstep(.3,.18,abs(fract(s)-.5))*smoothstep(.47,.36,abs(c-.5));}"
@@ -89,6 +154,10 @@ static const char mxdirt_fragment_body[]=
  "vec3 rnd(vec2 id){uvec2 q=uvec2(ivec2(id)+ivec2(1048576));uint h=(q.x*1597334677u)^(q.y*3812015801u);h^=h>>16;h*=2246822519u;h^=h>>13;h*=3266489917u;h^=h>>16;"
  "return vec3(uvec3(h,h>>11,h>>22)&uvec3(2047u,2047u,1023u))/vec3(2047.,2047.,1023.);}"
  "void main(){vec2 g=gv;vec3 w=wv;"
+ /* MESH: the square a finer level covers and everything past mesh_r are left to others. */
+ "\n#ifdef MESH\n"
+ "if(inner_in<.999||distance(ws_in,camera)>mesh_r)discard;"
+ "\n#endif\n"
  /* metres of ground per pixel: every procedural layer fades out before it aliases */
  /* px: the longest side of the ground a pixel covers; pa: the square root of its area. Wear runs along the
     riding line, so at riding distance a pixel is long ALONG the line and narrow ACROSS it: detail that
@@ -101,6 +170,26 @@ static const char mxdirt_fragment_body[]=
  "vec4 ef=smoothstep(vec4(0.),ramp,vec4(w.x-bounds.x,w.z-bounds.y,bounds.z-w.x,bounds.w-w.z));"
  "float amount=(1.-smoothstep(fade.x,fade.y,dist))*ef.x*ef.y*ef.z*ef.w*strength;"
  "if(amount<=.003)discard;"
+ /* MESH depth. The game's depth was copied before the pass (ndepth); the point it holds at this pixel is
+    rebuilt in the world (Pn, on this pixel's view ray). Is Pn ground - no higher than the height field
+    around it (the highest of 5 taps over the game's coarser far mesh cells) plus 1.5 cm and a little with
+    distance - inside mesh_r, then the mesh stands for that ground: mesh_clear (first draw, depth ALWAYS,
+    no colour) sets the depth there to far, and the colour draw sorts the mesh against itself only (depth
+    LEQUAL, its own depth): the face of a jump, roller or berm hides the ground behind it, and a trench
+    shows below the game's coarser ground. Anything else at Pn - the bike, a post, a rider - keeps its
+    depth and hides the mesh behind it. Same discards in both draws, so no cleared pixel is left empty.
+    (The old test took the game's depth as ground for up to .6 m along the ray: the ground just behind a
+    crest showed through it.) */
+ "\n#ifdef MESH\n"
+ "{float nd=texelFetch(ndepth,ivec2(gl_FragCoord.xy)-viewport_origin,0).r;"
+ "float Ln=projection[3][2]/(nd*2.-1.+projection[2][2]),Lf=projection[3][2]/(gl_FragCoord.z*2.-1.+projection[2][2]);"
+ "vec3 Pn=camera+(ws_in-camera)*(Ln/max(Lf,1e-4));float dn=distance(Pn,camera);bool grd=false;"
+ "if(nd<1.&&dn<mesh_r){vec2 gn=(Pn.xz-texel0.xz)/spacing+.5,rg=clamp(.015*dn,0.,1.2)/spacing;"
+ "float gm=max(H(gn).r,max(max(H(gn+vec2(rg.x,0.)).r,H(gn-vec2(rg.x,0.)).r),max(H(gn+vec2(0.,rg.y)).r,H(gn-vec2(0.,rg.y)).r)));"
+ "grd=Pn.y<=texel0.y+gm+.015+.002*dn;}"
+ "if(mesh_clear!=0){if(!grd)discard;gl_FragDepth=1.;color=vec4(0.);return;}"
+ "gl_FragDepth=gl_FragCoord.z;}"
+ "\n#endif\n"
  "ivec2 pix=ivec2(gl_FragCoord.xy)-viewport_origin;"
  /* Soft top layer, first: the view ray is marched down through it (parallax). The layer lies ON the ridden
     ground: its untouched top sits so above the terrain mesh, so a pressed trench floor (~.6 of the layer)
@@ -114,7 +203,7 @@ static const char mxdirt_fragment_body[]=
     surface, so the bike drawn afterwards sinks into the loose soil instead of standing on top of it.
     The march reads the layer between its top and its rest height along the view ray: if the tile
     around the middle of that stretch is clear in soft_occ, the ray meets the flat layer at so. */
- "float s_vis=0.,s_up=0.;vec2 s_q=vec2(0.);"
+ "float s_vis=0.,s_up=0.,mesh_vis=0.;vec2 s_q=vec2(0.);"
  "if(soft_on!=0){vec2 sl=p-soft_origin;float se=min(min(sl.x-soft_window.x,soft_window.z-sl.x),min(sl.y-soft_window.y,soft_window.w-sl.y));"
  /* The relief fades out with the ground a pixel covers. Its trenches run along the riding line, so at riding
     distance a pixel is long ALONG them and still narrow ACROSS them: the fade goes by the square root of the
@@ -127,9 +216,21 @@ static const char mxdirt_fragment_body[]=
   "px"
 #endif
  "));s_q=sl;"
- "if(s_vis>.01){vec3 Vs=normalize(camera-w);vec2 dv=Vs.xz/max(Vs.y,.2);float so=.6*soft_depth*soft_lift,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
+ "\n#ifdef MESH\n"
+ "mesh_vis=smoothstep(.5,10.,se)*(1.-smoothstep(mesh_r-6.,mesh_r,dist));s_vis=0.;"
+ "\n#endif\n"
+  /* so: the untouched layer's height above the mesh. Only the tyre-sink depth uses the lift: drawn raised, the
+    whole layer re-projected the ground picture in a zone that slid along with the camera (a "box" of moved
+    ground, ruts swimming by the fender). The colour program draws the untouched layer at the mesh, exactly
+    the game's own ground, and only trenches and lips shift. */
+ "\n#ifdef SINK\n"
+ "const float so_k=1.;"
+ "\n#else\n"
+ "const float so_k=0.;"
+ "\n#endif\n"
+ "if(s_vis>.01){vec3 Vs=normalize(camera-w);vec2 dv=Vs.xz/max(Vs.y,.2);float so=.6*soft_depth*soft_lift*so_k,top=so+min(127.*soft_unit,soft_depth*1.7),bot=so-min(127.*soft_unit,soft_depth*2.);"
  "float yh=so;"
- "if(texelFetch(soft_occ,ivec2(floor((sl+dv*(.5*(top+so)-(top-bot)/32.))/soft_tile))&ivec2(63),0).r>0.){"
+ "if(NEARTY(sl)||texelFetch(soft_occ,ivec2(floor((sl+dv*(.5*(top+so)-(top-bot)/32.))/soft_tile))&ivec2(63),0).r>0.){"
  "float yp=top,hp=SH(sl+dv*top)+so;yh=bot;"
  "for(int i=1;i<=16;i++){float y=mix(top,bot,float(i)/16.),h=SH(sl+dv*y)+so;if(h>=y){float t=(yp-hp)/max((yp-hp)-(y-h),1e-6);yh=mix(yp,y,clamp(t,0.,1.));break;}yp=y;hp=h;}}"
  "s_up=yh*s_vis;vec2 sh=dv*s_up;s_q=sl+sh;"
@@ -141,7 +242,16 @@ static const char mxdirt_fragment_body[]=
  "if((soft_mode&1)!=0&&dot(sh,sh)>4e-6){g+=sh/spacing;w.xz+=sh;p=w.xz;"
  "float hy=texture(heights,(g+shift)/SIDE).r*height_scale;vec4 c=projection*view*vec4(p.x,texel0.y+hy+.004,p.y,1.);"
  "if(c.w>.05){vec2 n=c.xy/c.w;if(abs(n.x)<.999&&abs(n.y)<.999)pix=ivec2((n*.5+.5)*vec2(textureSize(background,0)));}}}}"
- "vec3 native=texelFetch(background,pix,0).rgb;"
+ /* MESH: the relief strength of the mesh, and the native colour of this ground point where the game drew it -
+    on the flat, untouched layer (no lift) that is this very pixel, as in the colour pass */
+ "\n#ifdef MESH\n"
+ "s_vis=mesh_vis;if(abs(ws_in.y-wv.y)>.002){vec4 c=projection*view*vec4(w.x,w.y+.004,w.z,1.);if(c.w>.05){vec2 n=c.xy/c.w;if(abs(n.x)<.999&&abs(n.y)<.999)pix=ivec2((n*.5+.5)*vec2(textureSize(background,0)));}}"
+ "\n#endif\n"
+ /* the snapshot holds whatever the game drew before the terrain - on the bike camera the bike itself: a
+    re-projected pixel that is not like this pixel's own ground is not ground (the white fender smeared into
+    the rut beside it), so the pixel keeps its own colour */
+ "vec3 native=texelFetch(background,pix,0).rgb;{vec3 own=texelFetch(background,ivec2(gl_FragCoord.xy)-viewport_origin,0).rgb;"
+ "if(max(max(abs(native.r-own.r),abs(native.g-own.g)),abs(native.b-own.b))>.22)native=own;}"
  "float lum0=dot(native,vec3(.299,.587,.114));"
  "float green=clamp((native.g-max(native.r,native.b))/max(lum0,.02)*4.,0.,1.);"
  /* native sun, eye space -> world via the captured terrain view */
@@ -163,8 +273,13 @@ static const char mxdirt_fragment_body[]=
  "float raised=smoothstep(.004,.04,dd),dug=smoothstep(.004,.05,-dd),rough=smoothstep(.012,.06,abs(dlap));"
  /* depth shading: the deformation at this pixel - exact up close, the mean of the ~5 cells already read
     where a pixel covers more than a cell (a thin rut far away stays a steady darker line, no sparkle) */
+ /* (no pull toward the deepest cell far away: it made ruts lighten as they came within ~7-15 m - seen
+    as the look drawing itself in front of the bike) */
  "float dz=mix(dd,(2.*dd+(xp.r-xp.g)+(xm.r-xm.g)+(zp.r-zp.g)+(zm.r-zm.g)+2.*(ring.r-ring.g))*.125,smoothstep(.5,2.,px/min(spacing.x,spacing.y)));"
+ /* darkness tops out at ~11 cm; deeper than that the cut shows subsoil COLOUR instead (subsoil below) -
+    more darkness turned deep ruts and crash holes into near-black patches */
  "float r_dark=pow(clamp((-dz-.008)/.10,0.,1.),.6),r_light=pow(clamp((dz-.010)/.14,0.,1.),.7);"
+ "float subsoil=smoothstep(.05,.22,-dz);"
  /* soil state: the dirt sim's own per-texel state, else height-only defaults */
  "float s_pack=0.,s_loose=0.,wet=.35,s_clod=0.;"
  "if(state_on!=0){vec4 q=texture(state,(g+shift)/SIDE);s_pack=q.r;s_loose=q.g;wet=q.b;s_clod=q.a;}"
@@ -190,11 +305,12 @@ static const char mxdirt_fragment_body[]=
     Nothing uses it on untouched ground without the soft layer. */
  "if(abs(det)>1e-14&&pa*pa<.05*px&&(worked>.003||soft_on!=0)){mat2 Ji=mat2(dpy.y,-dpx.y,-dpy.x,dpx.x)/det;"
  "for(int i=0;i<6;i++){float a=1.0472*float(i)+.5236;vec2 o=Ji*(vec2(cos(a),sin(a))*.02);float ol=length(o);if(ol>10.)o*=10./ol;"
- "blur+=texelFetch(background,clamp(pix+ivec2(round(o)),ivec2(0),vmax),0).rgb;bw+=1.;}}"
+ "vec3 b=texelFetch(background,clamp(pix+ivec2(round(o)),ivec2(0),vmax),0).rgb;" /* skip samples that are not this ground (the bike, a post) */
+ "float k=1.-smoothstep(.12,.25,max(max(abs(b.r-native.r),abs(b.g-native.g)),abs(b.b-native.b)));blur+=b*k;bw+=k;}}"
  "vec3 albedo=mix(native,blur/bw,worked*(.12+.28*firm));" /* loose dirt keeps its grit, packed lines smooth out */
  /* clods (~4-6 cm) on loose soil, crumbs (~2 cm) on worked soil, soft swell (~20 cm) */
 #if MXDIRT_DETAIL_AREA
- "float f_big=1.-smoothstep(.020,.100,pa),f_mid=1.-smoothstep(.008,.040,pa);"
+ "float f_big=1.-smoothstep(.160,.800,pa),f_mid=1.-smoothstep(.064,.320,pa);" /* 8x the old reach: no extra flicker in the bench */
 #else
  "float f_big=1.-smoothstep(.010,.025,px),f_mid=1.-smoothstep(.004,.010,px);"
 #endif
@@ -229,7 +345,7 @@ static const char mxdirt_fragment_body[]=
  "float s_h=0.,s_press=0.,s_lip=0.,s_shade=1.,s_cav=0.,s_lay=0.,s_new=0.,s_touch=0.;"
  "if(soft_on!=0){s_lay=1.-green;"
  /* everything read below lies within one tile of the middle of the sun-shadow stretch: clear there = flat, untouched layer */
- "if(s_vis>.01&&texelFetch(soft_occ,ivec2(floor((s_q+L.xz/max(L.y,.12)*.044)/soft_tile))&ivec2(63),0).r>0.){"
+ "if(s_vis>.01&&(NEARTY(s_q)||texelFetch(soft_occ,ivec2(floor((s_q+L.xz/max(L.y,.12)*.044)/soft_tile))&ivec2(63),0).r>0.)){"
  "vec2 q=s_q;float c=soft_cell;s_h=SH(q);"
  "vec2 sg=vec2(SH(q+vec2(c,0))-SH(q-vec2(c,0)),SH(q+vec2(0,c))-SH(q-vec2(0,c)))/(2.*c);"
  "s_cav=(SH(q+vec2(2.5*c,0))+SH(q-vec2(2.5*c,0))+SH(q+vec2(0,2.5*c))+SH(q-vec2(0,2.5*c)))*.25-s_h;"
@@ -248,7 +364,7 @@ static const char mxdirt_fragment_body[]=
  "float k0=kblock(q,f,n),kx=kblock(q+vec2(.003,0),f,n),kz=kblock(q+vec2(0,.003),f,n);"
  "kg=-vec2(kx-k0,kz-k0)/.003*.005*s_press*(.35+.65*damp)*(.55+.45*s_new)*(1.-smoothstep("
 #if MXDIRT_DETAIL_AREA
- ".008,.030,pa"
+ ".064,.240,pa" /* knob prints: out to ~8-20 m at a 124 degree view (was 2-5 m: watched them draw in) */
 #else
  ".006,.016,px"
 #endif
@@ -279,6 +395,10 @@ static const char mxdirt_fragment_body[]=
  "if(lump>0.)lshade=1.;"
   /* a far lump keeps its shape and fades in by opacity (lvis), so it never appears at full contrast */
  "micro=mix(micro,lslope*1.3,smoothstep(0.,.25,lump/max(lvis,1e-3))*lvis);}"
+ /* where the lumps fade out (by their size on screen) the ground keeps their average look - a darker,
+    clod-strewn tone - so they resolve out of it on the way in instead of appearing on clean ground 2-5 m
+    ahead (most visible in mud, which throws the most) */
+ "if(state_on!=0&&s_clod>.004){float rm=.025*(.8+.45*damp),lvm=1.-smoothstep(.35*rm,1.6*rm,px);lshade*=1.-.12*clamp(s_clod*1.15,0.,1.)*(1.-lvm)*(1.-green);}"
  "vec3 nb=normalize(vec3(-base_slope.x,1.,-base_slope.y));"
  "vec3 nd=normalize(vec3(-(sharp_slope.x+.3*dslope.x+micro.x),1.,-(sharp_slope.y+.3*dslope.y+micro.y)));"
  /* sun shadows from the deformation only: occlusion along the sun ray over
@@ -298,14 +418,45 @@ static const char mxdirt_fragment_body[]=
     laps), so the latest passes stand out and the dark ruts stay easy to read against it. A fresh trench
     floor is a touch darker. (Dark loose soil hid the ruts: the whole line went dark.) */
  "val+=(-.07*s_press*(.5+.5*damp)+s_lip*(.06+.10*s_new)*(1.-.5*damp)-.04*s_new*s_press)*s_vis;sat+=(-.06*s_lip*(.4+.6*s_new)+.04*s_new*s_press)*s_vis;"
- /* depth shading: up to -24 % in a rut 11 cm deep, +11 % on soil raised 15 cm, at relief 1. Less where the
+ /* depth shading: -11 % in a 4 cm rut, -18 % from 11 cm (never below 70 %; deeper reads as subsoil colour), +11 % on soil raised 15 cm, at relief 1. Less where the
     floor is already darkened as damp, so deep wet ruts do not go black. */
- "val*=1.-relief*.24*r_dark*(1.-.45*wetv)+relief*.11*r_light;"
+ /* the same at every distance: anything that changes with distance is seen changing as you ride up to it */
+ "const float rfar=1.;"
+ "val*=max(.70,1.-relief*rfar*.18*r_dark*(1.-.45*wetv)+relief*rfar*.11*r_light);" /* never near black, even at relief 200 */
+ /* berms read sooner: the top edge of raised soil (6-18 cm up and convex) is dry loose soil, lighter and
+    duller; the groove a rut cuts along a berm's foot (dug, with much higher ground within ~60 cm) a touch
+    darker - inside the groove only, never a band beside it. Both carry with distance like the depth tone. */
+ "float crest=smoothstep(.06,.18,dd)*smoothstep(.01,.04,-hollow),groove=smoothstep(.03,.08,-dd)*smoothstep(.05,.12,hollow);"
+ "val*=1.+relief*rfar*(.09*crest*(1.-.5*damp)-.08*groove);sat-=.10*crest*relief;"
+ /* the main line stands out: the packed, ridden-in line a little darker and smoother, the loose soil
+    beside it a little lighter and drier - the fast line reads at a glance, also on a fresh pre-worn track */
+ "float mainl=firm*(1.-loose)*worked,loosel=loose*(1.-firm)*worked;"
+ "val*=1.+rfar*(-.06*mainl+.05*loosel*(1.-.6*damp));sat+=.04*mainl-.05*loosel;"
+ /* the chosen surface ([soil] surface), on worked ground only (untouched ground keeps the game's look):
+    loam darker and richer, hardpack lighter and dusty, sand pale and light, mud dark, rich and wet */
+ "if(surface==1){val*=1.-.20*worked;sat+=.22*worked;}"
+ "else if(surface==2){val*=1.+.12*worked;sat*=1.-.40*worked;}"
+ "else if(surface==3){val*=1.+.15*worked;sat*=1.-.30*worked;}"
+ "else if(surface==4){val*=1.-.32*worked;sat+=.30*worked;}"
  "vec3 soilc=max(mix(vec3(lum),albedo,sat),0.)*val;"
+ "if(surface==3)soilc=mix(soilc,vec3(dot(soilc,vec3(.299,.587,.114)))*vec3(1.16,1.,.72),.60*worked);"
+ "else if(surface==4)soilc*=mix(vec3(1.),vec3(.95,.86,.76),worked);"
+ /* subsoil: a cut deeper than ~5 cm exposes the denser soil under the dry top - the track's own dirt colour
+    turned browner and redder and a little deeper (sand: damper and darker, not redder), fully by ~22 cm.
+    Deep ruts and crash holes read as cut soil, not black; far away it holds the deep lines apart. */
+ "{float sl=dot(soilc,vec3(.299,.587,.114));vec3 sub=soilc*(surface==3?vec3(.92,.90,.86):vec3(1.12,.93,.78));"
+ "sub*=.90*sl/max(dot(sub,vec3(.299,.587,.114)),1e-3);soilc=mix(soilc,sub,.75*subsoil*worked*(1.-green));}"
  /* sheen: wet rut bottoms and damp hard-pack, never loose dirt or grass */
  "vec3 V=normalize(camera-w),Hv=normalize(L+V);"
  "float gloss=(.06*firm*(.3+.7*damp)+.16*wetv+.05*s_press*s_vis*damp)*(1.-.8*loose)*(1.-green);"
- "float spec=2.*gloss*pow(max(dot(nd,Hv),0.),40.)*max(dot(nd,L),0.);"
+ "if(surface==4)gloss+=.16*worked*(1.-green)*max(dug,s_press*s_vis);else if(surface==2||surface==3)gloss*=.3;"
+ /* specular anti-aliasing: a 40-power highlight on pixel-sized bumps (knob prints, crumbs, clods) caught the
+    sun for one frame and flashed white specks just ahead of the bike (mud, low sun). The highlight uses half
+    the fine bumps, and widens (and dims to the same energy) by how much the normal changes from one pixel to
+    the next. */
+ "vec3 ns=normalize(vec3(-(sharp_slope.x+.3*dslope.x+.5*micro.x),1.,-(sharp_slope.y+.3*dslope.y+.5*micro.y)));"
+ "vec3 dn=abs(dFdx(nd))+abs(dFdy(nd));float a2=2./42.+min(2.*dot(dn,dn),.5),ex=max(2./a2-2.,2.);"
+ "float spec=min(1.2*gloss*pow(max(dot(ns,Hv),0.),ex)*(ex+2.)/42.*max(dot(ns,L),0.),.22);" /* the sun's mirror point lies 1-3 m ahead of a helmet camera: a strong sheen there read as a bright patch riding along with the bike */
  "vec3 sunc=gl_LightSource[0].diffuse.rgb;if(dot(sunc,vec3(1))<.05)sunc=vec3(1);sunc=min(sunc,vec3(1.5));"
  "float sshade=mix(1.,s_shade,s_vis);"
  "vec3 lit=soilc*relight*ao*crevice*shade*lshade*sshade+sunc*spec*shade*sshade;"

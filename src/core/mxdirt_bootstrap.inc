@@ -6,7 +6,7 @@
    collision, pending, dirty, pacing or saved-track data is written here. */
 enum { RA_BOOT_IDLE,RA_BOOT_DRAINING,RA_BOOT_ADOPTED,RA_BOOT_ABORTED };
 static const unsigned char ra_boot_receive_call[5]={0xe8,0xba,0xf9,0xff,0xff};
-static const unsigned char ra_boot_dig_call[5]={0xe8,0x0c,0x70,0x01,0};
+static const unsigned char ra_boot_dig_call[5]={0xe8,0x6c,0x6f,0x01,0};
 static int ra_bootstrap_receive(void);
 static int ra_bootstrap_excavation(void *,float,float,double);
 static int ra_bootstrap_owned(void){return ra_bootstrap_hooks[0].owned||ra_bootstrap_hooks[1].owned;}
@@ -64,11 +64,11 @@ static int ra_bootstrap_arm(void){
  MxbBootstrapOrigin q={(uintptr_t)ra_image,ra_image_size,0,0,0,ra_verified_hash,NULL};
  if(!mxb_bootstrap_code(ra_read,NULL,&q)||!mxdirt_patches_present(ra_image)||!ra_bootstrap_binding(0))return 0;
  MxbExcavationCallPlan plan;
- if(!ra_hook_plan(&ra_bootstrap_hooks[0],ra_image+0x2a6241,ra_boot_receive_call,(uintptr_t)ra_bootstrap_receive)||
-  !ra_hook_plan(&ra_bootstrap_hooks[1],ra_image+0x1a4d8f,ra_boot_dig_call,(uintptr_t)ra_bootstrap_excavation)||
+ if(!ra_hook_plan(&ra_bootstrap_hooks[0],ra_image+0x2a6481,ra_boot_receive_call,(uintptr_t)ra_bootstrap_receive)||
+  !ra_hook_plan(&ra_bootstrap_hooks[1],ra_image+0x1a4e2f,ra_boot_dig_call,(uintptr_t)ra_bootstrap_excavation)||
   !mxb_excavation_call_plan((uintptr_t)ra_image,(uintptr_t)ra_bootstrap_hooks[1].relay,1,
-   ra_image+0x1a4d8f,ra_image+0x1bbda0,&plan))return 0;
- ra_bootstrap_original_receive=(RaCloseFn)(ra_image+0x2a5c00);
+   ra_image+0x1a4e2f,ra_image+0x1bbda0,&plan))return 0;
+ ra_bootstrap_original_receive=(RaCloseFn)(ra_image+0x2a5e40);
  ra_bootstrap_original_excavation=(MxbNativeExcavation)(ra_image+0x1bbda0);
  ra_bootstrap_generation=ra_generation;ra_bootstrap_calls=ra_bootstrap_attempts=ra_bootstrap_suppressed=0;
  ra_bootstrap_elapsed=ra_bootstrap_clock=ra_bootstrap_attempt_at=0;InterlockedExchange(&ra_bootstrap_cancel,0);
@@ -88,7 +88,7 @@ static __declspec(noinline) int ra_bootstrap_excavation(void *terrain,float x,fl
  int suppress=owner&&depth==1&&!ra_bootstrap_depth&&ra_bootstrap_phase==RA_BOOT_DRAINING&&
   !ra_bootstrap_cancel&&ra_bootstrap_generation==ra_generation&&ra_event_valid&&ra_running&&
   !ra_transport&&!ra_session&&!ra_allowed&&!ra_foreign&&!ra_fatal&&scoped&&
-  caller==(uintptr_t)ra_image+0x1a4d94&&ra_bootstrap_hook_owned(&ra_bootstrap_hooks[1],(uintptr_t)ra_bootstrap_excavation)&&
+  caller==(uintptr_t)ra_image+0x1a4e34&&ra_bootstrap_hook_owned(&ra_bootstrap_hooks[1],(uintptr_t)ra_bootstrap_excavation)&&
   mxb_bootstrap_immediate(ra_read,NULL,(uintptr_t)ra_image)&&ra_bootstrap_binding(0);
  if(owner&&depth!=1)ra_bootstrap_abort(-3);
  SetLastError(incoming);int result;
@@ -115,7 +115,7 @@ static __declspec(noinline) int ra_bootstrap_receive(void){
    ra_bootstrap_hook_owned(&ra_bootstrap_hooks[0],(uintptr_t)ra_bootstrap_receive)&&
    ra_bootstrap_hook_owned(&ra_bootstrap_hooks[1],(uintptr_t)ra_bootstrap_excavation);
   int qualified=result==0&&ancestry&&mxb_bootstrap_immediate(ra_read,NULL,(uintptr_t)ra_image);
-  int expired=ra_bootstrap_elapsed>=30000||ra_bootstrap_calls>=20000;
+  int expired=ra_bootstrap_elapsed>=60000||ra_bootstrap_calls>=40000;
   if(qualified){
    ra_bootstrap_gap=1;ra_bootstrap_gap_generation=generation;ra_bootstrap_gap_token=token;
    if(expired){

@@ -158,6 +158,31 @@ fail:mxdirt_session_destroy(s);return 0;
 int mxdirt_session_set_depth_response(MxdirtSession *s,float response) {
     return fresh(s)&&!s->sim&&mxdirt_height_field_set_depth_response(s->height,response);
 }
+/* Track surface height (m) at texel centres from a deformation, so loose soil slides on real slopes. The
+   track SHAPE is the int16 physics base (metres = base*vs/65535); the deformation dfm is added on top (DFM
+   falls as height rises). Destination rows run with +z, texel rows with -z. Optional: on failure loose soil
+   relaxes against the deformation only. */
+static void sim_base_from(MxdirtSession *s,const int32_t *dfm){
+    uint32_t dw=s->c.height.destination_width,dh=s->c.height.destination_height,n=s->sim->size;
+    const int16_t *shape=mxdirt_height_field_base(s->height);
+    if(dw>=2&&dh>=2&&dfm&&shape&&s->c.height.mxb_vertical_scale>0.){
+        float *b=s->sim->base?s->sim->base:malloc((size_t)n*n*sizeof(float));
+        if(b){
+            double k=s->c.height.mxb_vertical_scale/(65535.*65536.);const float off=s->sim->texel_off;
+            for(uint32_t r=0;r<n;r++){
+                float v=(1.f-((float)r+off)/n)*(dh-1);int j=(int)v;if(j>(int)dh-2)j=dh-2;float fv=v-j;
+                for(uint32_t q=0;q<n;q++){
+                    float u=((float)q+off)/n*(dw-1);int i=(int)u;if(i>(int)dw-2)i=dw-2;float fu=u-i;
+                    const int32_t *a0=dfm+(size_t)j*dw+i,*a1=a0+dw;const int16_t *h0=shape+(size_t)j*dw+i,*h1=h0+dw;
+                    double d=(1-fu)*(1-fv)*a0[0]+fu*(1-fv)*a0[1]+(1-fu)*fv*a1[0]+fu*fv*a1[1];
+                    double hb=(1-fu)*(1-fv)*h0[0]+fu*(1-fv)*h0[1]+(1-fu)*fv*h1[0]+fu*fv*h1[1];
+                    b[(size_t)r*n+q]=(float)(hb*65536.*k-d*k);
+                }
+            }
+            s->sim->base=b;
+        }
+    }
+}
 /* Dirt simulation. depth_percent scales sinkage/roost (10..300);
    firmness_percent sets untouched-track compaction (0 loose..100 hardpack). */
 int mxdirt_session_start_sim(MxdirtSession *s,float depth_percent,float firmness_percent){
@@ -174,30 +199,7 @@ int mxdirt_session_start_sim(MxdirtSession *s,float depth_percent,float firmness
     s->sim->p.hardpan=.20f*sqrtf(fmaxf(.5f,fminf(2.5f,depth_percent/50.f)));
     s->bias_floor_m=.04f*fmaxf(.3f,fminf(2.5f,depth_percent/50.f)); /* washboard trough bound, same erode scale */
     s->sim->p.depth_scale=depth_percent/100.f;s->sim->p.compaction0=.12f+.35f*firmness_percent/100.f; /* untouched ground is a freshly ripped track (55 % -> .31): first passes cut soft, deep grooves that pack with traffic */
-    /* Track surface height (m) at texel centres from the loaded terrain, so loose
-       soil slides on real slopes. The track SHAPE is the int16 physics base
-       (metres = base*vs/65535); the saved deformation in the DFM is added on top
-       (DFM falls as height rises). Destination rows run with +z, texel rows with
-       -z. Optional: on failure loose soil relaxes against the deformation only. */
-    uint32_t dw=s->c.height.destination_width,dh=s->c.height.destination_height,n=s->sim->size;
-    const int16_t *shape=mxdirt_height_field_base(s->height);
-    if(dw>=2&&dh>=2&&s->accepted&&shape&&s->c.height.mxb_vertical_scale>0.){
-        float *b=malloc((size_t)n*n*sizeof(float));
-        if(b){
-            double k=s->c.height.mxb_vertical_scale/(65535.*65536.);const float off=s->sim->texel_off;
-            for(uint32_t r=0;r<n;r++){
-                float v=(1.f-((float)r+off)/n)*(dh-1);int j=(int)v;if(j>(int)dh-2)j=dh-2;float fv=v-j;
-                for(uint32_t q=0;q<n;q++){
-                    float u=((float)q+off)/n*(dw-1);int i=(int)u;if(i>(int)dw-2)i=dw-2;float fu=u-i;
-                    const int32_t *a0=s->accepted+(size_t)j*dw+i,*a1=a0+dw;const int16_t *h0=shape+(size_t)j*dw+i,*h1=h0+dw;
-                    double dfm=(1-fu)*(1-fv)*a0[0]+fu*(1-fv)*a0[1]+(1-fu)*fv*a1[0]+fu*fv*a1[1];
-                    double hb=(1-fu)*(1-fv)*h0[0]+fu*(1-fv)*h0[1]+(1-fu)*fv*h1[0]+fu*fv*h1[1];
-                    b[(size_t)r*n+q]=(float)(hb*65536.*k-dfm*k);
-                }
-            }
-            s->sim->base=b;
-        }
-    }
+    sim_base_from(s,s->accepted);
     return 1;
 }
 /* hardness_percent scales how hard a fully ridden-in line gets (log of the
@@ -234,7 +236,7 @@ static void soft_contact(void *user,unsigned wheel,const MxbSoilSimWheel *w,floa
        lies deeper on loose soil and a softer track, thinner and ironed flat on
        packed lines, and holds crisp prints and tall lips when damp */
     const MxbSoilSim *m=s->sim;const float c0=m->p.compaction0;
-    MxdSoftSoil soil={1.f+(.31f-c0)*1.3f,m->p.moisture,0.f}; /* firmness 55 % (c0 .31) = 1 */
+    MxdSoftSoil soil={1.f+(.31f-c0)*1.3f,m->p.moisture,0.f,m->p.surface}; /* firmness 55 % (c0 .31) = 1 */
     /* bilinear between sim texel centres: nearest-cell values stepped the trench depth every 27 cm */
     float col,row;mxb_ss_texel(m,X,Z,&col,&row);int q=(int)floorf(col),r=(int)floorf(row);
     if(q>=0&&r>=0&&q<(int)m->size-1&&r<(int)m->size-1){float fu=col-(float)q,fv=row-(float)r,c=0.f,mo=0.f,lo=0.f;
@@ -242,7 +244,7 @@ static void soft_contact(void *user,unsigned wheel,const MxbSoilSimWheel *w,floa
             c+=wgt*mxb_ss_c(m,k);mo+=wgt*mxb_ss_moist(m,k);lo+=wgt*fminf(m->loose[k],.06f);}
         soil.moisture=mo;soil.packed=fminf(1.f,fmaxf(0.f,(c-c0)/.35f));
         soil.thick=soil.thick*fminf(1.3f,fmaxf(.35f,1.f-1.1f*(c-c0)))+5.f*lo;}
-    mxd_soft_stamp(s->soft,wheel==1,X,Z,w->fwd,w->lat,v,w->dt,w->load,spin,skid,w->slip_lat,w->material,w->print_fade<.3f,&soil);
+    mxd_soft_stamp(s->soft,wheel==1,X,Z,w->fwd,w->lat,v,w->dt,w->load,spin,skid,w->slip_lat,mxb_surface_material(s->sim?s->sim->p.surface:0,w->material),w->print_fade<.3f,&soil);
 }
 /* Loose soil the sim drops (berms, row crests, roost) fills the layer's trenches and buries prints. */
 static void soft_deposit(void *user,float X,float Z,const float d[2],float a,float b,float w,float volume){
@@ -445,9 +447,9 @@ int mxdirt_session_prewear(MxdirtSession *s,const MxbDirtGhostLap *laps,unsigned
    game saved after a ride already carries the pre-wear of that ride, so pre-wear
    can run only on a fresh track instead of stacking on every load. */
 uint64_t mxdirt_session_saved_wear(const MxdirtSession *s,double min_m){
-    if(!s||!s->accepted||!(s->c.height.mxb_vertical_scale>0.))return 0;
+    if(!s||!s->target||!(s->c.height.mxb_vertical_scale>0.))return 0;
     double k=s->c.height.mxb_vertical_scale/(65535.*65536.);size_t n=(size_t)s->c.height.destination_width*s->c.height.destination_height;uint64_t c=0;
-    for(size_t i=0;i<n;i++)if(fabs((double)s->accepted[i]*k)>min_m)c++;
+    for(size_t i=0;i<n;i++)if(fabs((double)s->target[i]*k)>min_m)c++; /* the sim's own state: after a rebase, what it starts from */
     return c;
 }
 int mxdirt_session_set_live_gate(MxdirtSession *s,unsigned lines){
@@ -518,6 +520,10 @@ int mxdirt_session_live_settings(MxdirtSession *s,const MxdirtLiveSettings *v){
     if(v->cohesion_percent>=0.f)p->cohesion=v->cohesion_percent/100.f;
     if(v->clods_percent>=0.f)p->clods=v->clods_percent/100.f;
     return 1;
+}
+int mxdirt_session_set_surface(MxdirtSession *s,int surface){
+    if(!owned(s)||!s->sim||surface<0||surface>4)return 0;
+    s->sim->p.surface=surface;return 1;
 }
 int mxdirt_session_set_rolling_bumps(MxdirtSession *s,float percent){
     if(!fresh(s)||!isfinite(percent)||percent<0.f||percent>100.f)return 0;
@@ -657,3 +663,39 @@ int mxdirt_session_state(const MxdirtSession *s,MxdirtSessionState *out) {
         s->cells,s->c.sparse_capacity,s->priming,s->faulted};return 1;
 }
 const int32_t *mxdirt_session_target(const MxdirtSession *s){return owned(s)?s->target:NULL;}
+const int32_t *mxdirt_session_accepted(const MxdirtSession *s){return owned(s)?s->accepted:NULL;}
+/* Start over from another deformation: a different surface's kept wear (at setup) or the track the game just
+   reset (mid-ride). start: the deformation the sim starts from; native: what the game holds now. Cells where
+   they differ go out with the next publish (absolute cells, as pre-wear does). In place: the look plugin reads
+   the sim's arrays and the soft tiles, so nothing it can see is freed. The sim's settings are kept; its soil
+   (packing, loose, moisture, clods, prints), the work history and the soft layer start clean, and pre-wear or
+   a soil load may run again. Fails without changing anything when the new height mapping cannot be built. */
+int mxdirt_session_rebase(MxdirtSession *s,const int32_t *start,const int32_t *native,size_t count){
+    if(!owned(s)||!s->sim||!start||!native||count<s->cells)return 0;
+    int16_t *base=malloc(s->cells*sizeof(int16_t));if(!base)return 0;
+    memcpy(base,mxdirt_height_field_base(s->height),s->cells*sizeof(int16_t));
+    MxdirtHeightField *h=NULL;int ok=mxdirt_height_field_create(&h,&s->c.height,base,start,s->cells);free(base);
+    if(ok)ok=mxdirt_height_field_set_depth_response(h,mxdirt_height_field_depth_response(s->height))&&(!s->vertex_exact||mxdirt_height_field_set_vertex_exact(h,1));
+    MxbSoilSim *m=s->sim;const size_t n=(size_t)m->size*m->size;
+    float *enc=ok?malloc(n*sizeof(float)):NULL;int32_t *tg=ok?malloc(s->cells*sizeof(int32_t)):NULL;
+    if(enc)for(size_t k=0;k<n;k++)enc[k]=m->ref;
+    /* the neutral sim must reproduce the start exactly, as at create */
+    ok=ok&&enc&&tg&&mxdirt_height_field_convert(h,s->c.height.generation,enc,s->source_cells,tg,s->cells,NULL)&&!memcmp(tg,start,s->cells*sizeof(int32_t));
+    free(enc);if(!ok){free(tg);mxdirt_height_field_destroy(h);return 0;}
+    mxdirt_height_field_destroy(s->height);s->height=h;memcpy(s->target,tg,s->cells*sizeof(int32_t));free(tg);
+    for(size_t k=0;k<n;k++)m->h[k]=m->ref;
+    memset(m->loose,0,n*sizeof(float));memset(m->comp,0,n);memset(m->mat,0,n);memset(m->moist_off,0,n);memset(m->clods,0,n);
+    memset(m->print,0,n);memset(m->print_dir,0,n);memset(m->print_off,0,n);memset(m->tiles,0,(size_t)m->tiles_x*m->tiles_y);
+    m->has_last[0]=m->has_last[1]=0;m->time_s=0.;m->rect_n=0;m->box=0;
+    s->encoded=m->h;free(s->seed);s->seed=NULL;sim_base_from(s,start);
+    if(s->soil&&s->soil->cell)memset(s->soil->cell,0,(size_t)s->soil->width*s->soil->height*sizeof(*s->soil->cell));
+    mxd_soft_clear(s->soft);free(s->prewear_tiles);s->prewear_tiles=NULL;s->soil_touched=0;
+    /* what the game holds; every cell that differs is sent */
+    memcpy(s->accepted,native,s->cells*sizeof(int32_t));clear_candidates(s);int any=0;
+    const uint32_t W=s->c.height.destination_width;
+    for(uint32_t z=0;z<s->c.height.destination_height;z++){size_t row=(size_t)z*W;uint32_t lo=UINT32_MAX,hi=0;
+        for(uint32_t x=0;x<W;x++)if(s->accepted[row+x]!=s->target[row+x]){if(x<lo)lo=x;hi=x+1;}
+        if(hi){s->pending_begin[z]=lo;s->pending_end[z]=hi;any=1;}}
+    s->force_publish=any;s->generated_sequence=s->accepted_source_sequence=0;s->physics_seen=0;s->priming=1;
+    return 1;
+}

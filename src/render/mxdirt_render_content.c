@@ -15,7 +15,7 @@
 #include <wchar.h>
 static DWORD rc_thread;
 static int rc_started,rc_live,rc_retire,rc_fault;
-static int rc_dirt,rc_dirt_fault,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1;
+static int rc_dirt,rc_dirt_fault,rc_soft=1,rc_soft_live,rc_soft_solid=1,rc_tyre_sink=1,rc_soft_mesh=0,rc_soft_live_tyres=1;static float rc_soft_mesh_m=30.f;
 static MxDirt *rc_cpu;static MxDirtGl *rc_gl;static MxDirtLook rc_look;
 static uint64_t rc_serial,rc_peak,rc_ticks,rc_recentres,rc_frames,rc_skips,rc_generation;
 static int rc_state_live;static MxDirtStats rc_stats;
@@ -69,7 +69,7 @@ static int rc_cleanup(void){
 /* The launcher key: pressed in the game - only while the game's own window is in front - it brings up the
    MX Dirt Mod launcher (plugins\mx_dirt_launcher, next to the settings file): the open one, or a new one
    that starts on top. Polled once per drawn frame. */
-static int rc_key,rc_key_down;static wchar_t rc_ini[1024];
+static int rc_key,rc_key_down;static wchar_t rc_ini[1024],rc_core_ini[1024]; /* rc_core_ini: plugins\mx_dirt.ini ([soil] surface) */
 static void rc_launcher(void){
  HWND open=FindWindowW(NULL,L"MX Dirt Mod");
  if(open){if(IsIconic(open))ShowWindow(open,SW_RESTORE);SetForegroundWindow(open);mxdirt_content_note("launcher_key shown=1");return;}
@@ -101,8 +101,10 @@ static int rc_look_read(int startup){
  UINT relief=GetPrivateProfileIntW(L"renderer",L"dirt_relief",100,rc_ini),lift=GetPrivateProfileIntW(L"renderer",L"soft_lift_percent",100,rc_ini);
  const int valid=dirt<=1&&strength<=200&&loose<=100&&fade_start<fade_end&&fade_end<=100&&relief<=200&&lift<=100;
  if(!valid&&!startup)return 0;
+ {UINT sf=rc_core_ini[0]?GetPrivateProfileIntW(L"soil",L"surface",0,rc_core_ini):0;rc_look.surface=sf<=4?(int)sf:0;}
  rc_soft=GetPrivateProfileIntW(L"renderer",L"soft_layer",1,rc_ini)!=0;
  rc_soft_solid=GetPrivateProfileIntW(L"renderer",L"soft_solid",1,rc_ini)!=0;rc_tyre_sink=GetPrivateProfileIntW(L"renderer",L"tyre_sink",1,rc_ini)!=0;
+ rc_soft_mesh=GetPrivateProfileIntW(L"renderer",L"soft_mesh",0,rc_ini)!=0;rc_soft_live_tyres=GetPrivateProfileIntW(L"renderer",L"soft_live_tyres",1,rc_ini)!=0;{UINT mm=GetPrivateProfileIntW(L"renderer",L"soft_mesh_m",30,rc_ini);rc_soft_mesh_m=(float)(mm<10?10:mm>40?40:mm);}
  /* An invalid dirt key disables only this pass, never the renderer. */
  rc_dirt=dirt==1&&valid;
  if(valid){rc_look.strength=(float)strength/100.f;rc_look.base_loose=(float)loose/100.f;rc_look.fade_start=(float)fade_start;rc_look.fade_end=(float)fade_end;rc_look.relief=(float)relief/100.f;rc_look.lift=(float)lift/100.f;}
@@ -111,18 +113,22 @@ static int rc_look_read(int startup){
  return 1;
 }
 /* 1 once per change of the settings file, a quarter of a second after it was last written (never mid-save). */
-static int rc_ini_changed(void){
- WIN32_FILE_ATTRIBUTE_DATA a;if(!rc_ini[0]||!GetFileAttributesExW(rc_ini,GetFileExInfoStandard,&a)||!CompareFileTime(&a.ftLastWriteTime,&rc_ini_time))return 0;
+static int rc_file_changed(const wchar_t *path,FILETIME *seen){
+ WIN32_FILE_ATTRIBUTE_DATA a;if(!path[0]||!GetFileAttributesExW(path,GetFileExInfoStandard,&a)||!CompareFileTime(&a.ftLastWriteTime,seen))return 0;
  FILETIME now;GetSystemTimeAsFileTime(&now);
  const uint64_t n=((uint64_t)now.dwHighDateTime<<32)|now.dwLowDateTime,w=((uint64_t)a.ftLastWriteTime.dwHighDateTime<<32)|a.ftLastWriteTime.dwLowDateTime;
  if(n>=w&&n-w<2500000u)return 0;
- rc_ini_time=a.ftLastWriteTime;return 1;
+ *seen=a.ftLastWriteTime;return 1;
 }
+/* the look's own file, or mx_dirt.ini (the surface) */
+static FILETIME rc_core_ini_time;
+static int rc_ini_changed(void){const int a=rc_file_changed(rc_ini,&rc_ini_time),b=rc_file_changed(rc_core_ini,&rc_core_ini_time);return a||b;}
 int mxdirt_content_startup(const wchar_t *ini){
  DWORD error=GetLastError();int ok=0;if(rc_started||!ini)goto end;
  rc_thread=GetCurrentThreadId();{LARGE_INTEGER f;if(QueryPerformanceFrequency(&f)&&f.QuadPart>0)rc_ms_per_tick=1000./(double)f.QuadPart;}
  if(GetPrivateProfileIntW(L"renderer",L"enabled",0,ini)!=1)goto end;
  if(wcslen(ini)>=sizeof(rc_ini)/sizeof(*rc_ini))goto end;wcscpy(rc_ini,ini);
+ {wcscpy(rc_core_ini,ini);wchar_t *slash=wcsrchr(rc_core_ini,L'\\');if(slash&&wcslen(rc_ini)+4<sizeof(rc_core_ini)/sizeof(*rc_core_ini))wcscpy(slash+1,L"mx_dirt.ini");else rc_core_ini[0]=0;}
  (void)rc_look_read(1);(void)rc_ini_changed(); /* remembers the file time: later changes are picked up live */
  wchar_t log[32768];DWORD n=GetPrivateProfileStringW(L"renderer",L"content_log",L"plugins\\mx_dirt_render.log",log,32768,ini);
  n=game_path(log,n,32768);
@@ -198,7 +204,7 @@ static int rc_draw_dirt(const MxDirtFrame *frame,const MxDirtCameraScope *scope,
  MxDirtSoftInput soft;memset(&soft,0,sizeof(soft));int soft_on=0;
  if(rc_soft&&frame->soft_tile&&frame->soft_tile_serial){
   soft.tile=frame->soft_tile;soft.serial=frame->soft_tile_serial;soft.tiles_x=frame->soft_tiles_x;soft.tiles_z=frame->soft_tiles_z;soft.side=frame->soft_tile_side;
-  soft.cell=frame->soft_cell_m;soft.thickness=frame->soft_thickness_m;soft.unit=(float)frame->soft_unit_um*1e-6f;soft.origin_x=frame->origin_m[0];soft.origin_z=frame->origin_m[2];soft.solid=rc_soft_solid;soft.sink=rc_tyre_sink;soft_on=1;}
+  soft.cell=frame->soft_cell_m;soft.thickness=frame->soft_thickness_m;soft.unit=(float)frame->soft_unit_um*1e-6f;soft.origin_x=frame->origin_m[0];soft.origin_z=frame->origin_m[2];soft.solid=rc_soft_solid;soft.sink=rc_tyre_sink;soft.mesh=rc_soft_mesh;soft.mesh_r=rc_soft_mesh_m;soft.tyre_mask=rc_soft_live_tyres?frame->tyre_mask:0;memcpy(soft.tyre,frame->tyre,sizeof(soft.tyre));soft_on=1;}
  rc_soft_live=soft_on;
  int result=mxdirt_gl_draw(rc_gl,scope,&window,&rc_look,&state,soft_on?&soft:NULL);rc_ticks=rc_elapsed(start);
  rc_part[2]=rc_ticks-rc_part[0]-rc_part[1];

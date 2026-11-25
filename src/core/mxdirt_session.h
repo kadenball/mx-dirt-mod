@@ -54,6 +54,8 @@ int mxdirt_session_set_rolling_bumps(MxdirtSession *,float percent);
 int mxdirt_session_set_extra_riders(MxdirtSession *,unsigned riders);
 /* Live wear of each pass shared over 1..8 lines riding with the player (1 = one groove). */
 int mxdirt_session_set_live_gate(MxdirtSession *,unsigned lines);
+/* 0 the track's own surfaces, 1 loam, 2 hardpack, 3 sand, 4 mud: what every pass works on (live) */
+int mxdirt_session_set_surface(MxdirtSession *,int surface);
 int mxdirt_session_set_live_wear(MxdirtSession *,float percent); /* 0 Low .. 100 Medium .. 200 */
 /* Live tuning (the launcher, while riding): the same values and ranges as the setters above, taken at any
    time between steps. Each applies to what is worn from now on; what is already worn stays. A negative
@@ -120,6 +122,10 @@ int mxdirt_session_step(MxdirtSession *,const MxdirtControllerFrame frames[2],
 int mxdirt_session_publish(MxdirtSession *,uint64_t next_outer_sequence,MxdirtAcceptTarget,void *);
 /* Resend these destination cells on the next publish (tiles adopted by the transport). */
 int mxdirt_session_resend_rect(MxdirtSession *,uint32_t x,uint32_t z,uint32_t w,uint32_t h);
+/* What the game was last sent (owner thread). */
+const int32_t *mxdirt_session_accepted(const MxdirtSession *);
+/* Start over in place from deformation start while the game holds native (see mxdirt_session.c). */
+int mxdirt_session_rebase(MxdirtSession *,const int32_t *start,const int32_t *native,size_t count);
 /* After pause/reset: keep terrain, reset wheel inputs; primes on the next frame. */
 int mxdirt_session_reprime(MxdirtSession *);
 int mxdirt_session_state(const MxdirtSession *,MxdirtSessionState *);

@@ -80,9 +80,25 @@ static unsigned ra_lap_list(const char *dir,char names[64][MAX_PATH]){
  for(unsigned i=1;i<count;i++)for(unsigned j=i;j>0&&strcmp(names[j-1],names[j])>0;j--){char t[MAX_PATH];memcpy(t,names[j],MAX_PATH);memcpy(names[j],names[j-1],MAX_PATH);memcpy(names[j-1],t,MAX_PATH);}
  return count;
 }
+static char ra_lap_names[64][MAX_PATH];
+/* After the game reset the track mid-event (ra_game_reset_check): the pre-wear gate rides the fastest laps
+   again on the fresh track. Laps already held (live ghosts) are used as they are; otherwise they are loaded
+   for this and released. */
+static int ra_prewear_again(uint64_t *passes){
+ *passes=0;if(!ra_prewear_riders||!ra_session)return 0;
+ const int own=!ra_ghost_n;
+ if(own){char dir[MAX_PATH];unsigned count=0;
+  if(ra_lap_dir(RA_LAPS_DIR,dir,sizeof(dir),0))count=ra_lap_list(dir,ra_lap_names);
+  if(!count&&ra_lap_dir(RA_OLD_LAPS_DIR,dir,sizeof(dir),0))count=ra_lap_list(dir,ra_lap_names);
+  for(unsigned i=0;i<count&&ra_ghost_n<4;i++){char path[MAX_PATH];
+   if(snprintf(path,sizeof(path),"%s\\%s",dir,ra_lap_names[i])<(int)sizeof(path)&&mxb_dirt_ghost_load(path,ra_event_track,ra_ghosts+ra_ghost_n))ra_ghost_n++;}}
+ int pw=ra_ghost_n&&mxdirt_session_prewear(ra_session,ra_ghosts,ra_ghost_n<4?ra_ghost_n:4,ra_prewear_riders,
+    (float)ra_prewear_spread_cm/100.f,(float)ra_prewear_clip_cm/100.f,0x9e3779b9u,passes);
+ if(own)ra_ghost_free();
+ return pw;
+}
 /* At session setup: the fastest recorded laps of this track - ridden once by
    the pre-wear gate, then kept as live ghost riders if ghost_riders>0. */
-static char ra_lap_names[64][MAX_PATH];
 static void ra_ghost_load(void){
  ra_ghost_recording_reset();ra_lap_join(); /* a lap still being written must be in the folder before it is listed */
  if((!ra_ghost_riders&&!ra_prewear_riders)||!ra_session)return;

@@ -19,40 +19,40 @@ struct MxbPublicationHooks {
 };
 static MxbPublicationHooks *volatile bound;
 static const unsigned char publisher_call[5]={0xe8,0x66,0xf6,0xff,0xff};
-static const unsigned char receive_setup[28]={0x48,0x8d,0x84,0x24,0xd8,2,0,0,0x8b,8,0x48,0x8b,0x50,8,0x44,0x8b,0x40,0x10,0xe8,0x1e,0x8d,9,0,0xe9,0x8c,0x4f,0,0};
-static const unsigned char receive_thunk[38]={0xff,0xc9,0x83,0xf9,2,0x77,0x19,0x48,0x63,0xc9,0x48,0x8d,5,0x67,0xc6,0x3a,0,0x48,0x69,0xc9,0x60,0x61,0,0,0x48,3,0xc8,0xe9,0xf0,0xa0,3,0,0xb8,1,0,0,0,0xc3};
+static const unsigned char receive_setup[28]={0x48,0x8d,0x84,0x24,0xd8,0x02,0x00,0x00,0x8b,0x08,0x48,0x8b,0x50,0x08,0x44,0x8b,0x40,0x10,0xe8,0x9e,0x8d,0x09,0x00,0xe9,0xa2,0x4f,0x00,0x00};
+static const unsigned char receive_thunk[38]={0xff,0xc9,0x83,0xf9,2,0x77,0x19,0x48,0x63,0xc9,0x48,0x8d,5,0x67,0xc6,0x3a,0,0x48,0x69,0xc9,0x60,0x61,0,0,0x48,3,0xc8,0xe9,0x30,0xa3,3,0,0xb8,1,0,0,0,0xc3};
 static int receive_signature(const MxbPacingContext *c){
  if(!mxb_pace_context(c)||!mxb_pace_span(c,c->exe+0x1bbe10,38,0)||
-    memcmp(c->exe+0x1bbe10,receive_thunk,38)||!mxb_pace_span(c,c->exe+0x1f5f20,401,0))return 0;
+    memcmp(c->exe+0x1bbe10,receive_thunk,38)||!mxb_pace_span(c,c->exe+0x1f6160,401,0))return 0;
  uint64_t hash=UINT64_C(0xcbf29ce484222325);
- for(size_t i=0;i<401;i++)hash=(hash^c->exe[0x1f5f20+i])*UINT64_C(0x100000001b3);
+ for(size_t i=0;i<401;i++)hash=(hash^c->exe[0x1f6160+i])*UINT64_C(0x100000001b3);
  return hash==UINT64_C(0x06934feaf1d087a4);
 }
 static int publisher_signature(const MxbPacingContext *c,int normalize_selector){
- if(!mxb_pace_context(c)||!mxb_pace_span(c,c->exe+0x2a2e60,1254,0))return 0;
+ if(!mxb_pace_context(c)||!mxb_pace_span(c,c->exe+0x2a30a0,1254,0))return 0;
  uint64_t h=UINT64_C(0xcbf29ce484222325);
  for(size_t i=0;i<1254;i++){
-  unsigned char b=c->exe[0x2a2e60+i];
+  unsigned char b=c->exe[0x2a30a0+i];
   if(normalize_selector&&i>=0xc0&&i<0xc6)b=mxb_pace_sig[0][i-0xc0];
   h=(h^b)*UINT64_C(0x100000001b3);
- }return h==UINT64_C(0x290f9dafec7ae1d0);
+ }return h==UINT64_C(0xe6923e15ed5e79ba);
 }
 int mxb_publication_call_plan(const MxbPacingContext *c,uintptr_t replacement,MxbPublicationCallPlan *out){
- if(!out||!replacement||!publisher_signature(c,0)||!mxb_pace_span(c,c->exe+0x2a37f5,5,0)||
-    memcmp(c->exe+0x2a37f5,publisher_call,5))return 0;
- uintptr_t next=(uintptr_t)c->exe+0x2a37fa;int64_t displacement;
+ if(!out||!replacement||!publisher_signature(c,0)||!mxb_pace_span(c,c->exe+0x2a3a35,5,0)||
+    memcmp(c->exe+0x2a3a35,publisher_call,5))return 0;
+ uintptr_t next=(uintptr_t)c->exe+0x2a3a3a;int64_t displacement;
  if(replacement>=next){if(replacement-next>INT32_MAX)return 0;displacement=(int64_t)(replacement-next);}
  else {if(next-replacement>(uint64_t)INT32_MAX+1)return 0;displacement=-(int64_t)(next-replacement);}
- MxbPublicationCallPlan p={(uintptr_t)c->exe+0x2a37f5,(uintptr_t)c->exe+0x2a2e60,replacement,{0},{0}};
+ MxbPublicationCallPlan p={(uintptr_t)c->exe+0x2a3a35,(uintptr_t)c->exe+0x2a30a0,replacement,{0},{0}};
  memcpy(p.original,publisher_call,5);p.patch[0]=0xe8;int32_t d=(int32_t)displacement;memcpy(p.patch+1,&d,4);*out=p;return 1;
 }
 int mxb_publication_receive_plan(const MxbPacingContext *c,uintptr_t replacement,MxbPublicationCallPlan *out){
- if(!out||!replacement||!receive_signature(c)||!mxb_pace_span(c,c->exe+0x1230db,28,0)||
-    memcmp(c->exe+0x1230db,receive_setup,28))return 0;
- uintptr_t next=(uintptr_t)c->exe+0x1230f2;int64_t displacement;
+ if(!out||!replacement||!receive_signature(c)||!mxb_pace_span(c,c->exe+0x12305b,28,0)||
+    memcmp(c->exe+0x12305b,receive_setup,28))return 0;
+ uintptr_t next=(uintptr_t)c->exe+0x123072;int64_t displacement;
  if(replacement>=next){if(replacement-next>INT32_MAX)return 0;displacement=(int64_t)(replacement-next);}
  else {if(next-replacement>(uint64_t)INT32_MAX+1)return 0;displacement=-(int64_t)(next-replacement);}
- MxbPublicationCallPlan p={(uintptr_t)c->exe+0x1230ed,(uintptr_t)c->exe+0x1bbe10,replacement,{0},{0}};
+ MxbPublicationCallPlan p={(uintptr_t)c->exe+0x12306d,(uintptr_t)c->exe+0x1bbe10,replacement,{0},{0}};
  memcpy(p.original,receive_setup+18,5);p.patch[0]=0xe8;int32_t d=(int32_t)displacement;memcpy(p.patch+1,&d,4);*out=p;return 1;
 }
 static int binding(MxbPublicationHooks *h,int require_ours){
@@ -66,7 +66,7 @@ static int binding(MxbPublicationHooks *h,int require_ours){
     !mxb_pace_span(c,(void*)mxb_pace_ptr(c->exe+0x5a21c8+0x28),h->c.pending.pending_count*4,0))return 0;
  MxbPubState s;if(mxb_pub_state(h->c.ledger,&s)!=MXB_PUB_OK||s.generation!=c->generation||s.cells!=h->c.pending.pending_count)return 0;
  if(require_ours&&(mxb_pace_ptr(c->exe+0x5a2210)!=(uintptr_t)c->wrapper[0]||
-    memcmp(c->exe+0x2a37f5,h->c.call_plan.patch,5)||memcmp(c->exe+0x1230ed,h->c.receive_plan.patch,5)))return 0;
+    memcmp(c->exe+0x2a3a35,h->c.call_plan.patch,5)||memcmp(c->exe+0x12306d,h->c.receive_plan.patch,5)))return 0;
  return 1;
 }
 static void fail_at(MxbPublicationHooks *h,MxbPubResult r,int line){
@@ -107,11 +107,11 @@ int mxb_publication_hooks_bind(MxbPublicationHooks *h){
 int mxb_publication_hooks_unbind(MxbPublicationHooks *h){
  if(!h||h->stats.enabled||h->in_publisher||
     !mxb_pace_span(&h->c.pacing,h->c.pacing.exe+0x5a2210,8,0)||
-    !mxb_pace_span(&h->c.pacing,h->c.pacing.exe+0x2a37f5,5,0)||
-    !mxb_pace_span(&h->c.pacing,h->c.pacing.exe+0x1230ed,5,0)||
+    !mxb_pace_span(&h->c.pacing,h->c.pacing.exe+0x2a3a35,5,0)||
+    !mxb_pace_span(&h->c.pacing,h->c.pacing.exe+0x12306d,5,0)||
     mxb_pace_ptr(h->c.pacing.exe+0x5a2210)==(uintptr_t)h->c.pacing.wrapper[0]||
-    !memcmp(h->c.pacing.exe+0x2a37f5,h->c.call_plan.patch,5)||
-    !memcmp(h->c.pacing.exe+0x1230ed,h->c.receive_plan.patch,5))return 0;
+    !memcmp(h->c.pacing.exe+0x2a3a35,h->c.call_plan.patch,5)||
+    !memcmp(h->c.pacing.exe+0x12306d,h->c.receive_plan.patch,5))return 0;
  return InterlockedCompareExchangePointer((void*volatile*)&bound,NULL,h)==h;
 }
 int mxb_publication_hooks_enable(MxbPublicationHooks *h,DWORD thread){
@@ -229,7 +229,7 @@ MxbPubResult mxb_publication_after_native_replace(MxbPublicationHooks *h,uint64_
 int mxb_publication_run(MxbPublicationHooks *h,const void *slot,uintptr_t lo,uintptr_t hi,DWORD thread){
  if(!h)return 0;if(!h->stats.enabled)return h->c.original_publisher();
  DWORD incoming=GetLastError();
- if(!current_owner(h,thread)||!valid_return(&h->c.pacing,slot,lo,hi,(uintptr_t)h->c.pacing.exe+0x2a37fa)||
+ if(!current_owner(h,thread)||!valid_return(&h->c.pacing,slot,lo,hi,(uintptr_t)h->c.pacing.exe+0x2a3a3a)||
     InterlockedCompareExchange(&h->in_publisher,1,0)!=0){fail(h,MXB_PUB_FAULT);SetLastError(incoming);return 0;}
  h->stats.publisher_calls++;h->dirty_seen=0;h->selected_count=0;h->stats.last_selected_tiles=0;h->echo_count=0;memset(h->echo_seen,0,h->tiles);
  uint64_t prior_reservation=h->reservation;
@@ -256,7 +256,7 @@ int mxb_publication_receive(MxbPublicationHooks *h,int id,const int32_t *full,in
  if(!h)return 1;if(!h->stats.enabled||id!=1)return h->c.original_replace(id,full,tile);
  DWORD incoming=GetLastError();
  if(h->faulted){SetLastError(incoming);return 1;}
- if(!current_owner(h,thread)||!valid_return(&h->c.pacing,slot,lo,hi,(uintptr_t)h->c.pacing.exe+0x1230f2)||
+ if(!current_owner(h,thread)||!valid_return(&h->c.pacing,slot,lo,hi,(uintptr_t)h->c.pacing.exe+0x123072)||
     tile<0||(size_t)tile>=h->tiles||!binding(h,1)||
     (uintptr_t)full!=mxb_pace_ptr(h->c.pacing.exe+0x5a21c8+0x28)){
   fail(h,MXB_PUB_FAULT);SetLastError(incoming);return 1;

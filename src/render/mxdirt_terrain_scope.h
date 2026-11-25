@@ -71,6 +71,6 @@ typedef struct {
     unsigned char original[5], patch[5], relay_bytes[14];
     uint32_t relay_size;
 } MxDirtTsCallPlan;
-#define MXDIRT_TS_TERRAIN_CALL 0x24f613u
+#define MXDIRT_TS_TERRAIN_CALL 0x24f853u
 int mxdirt_ts_plan_terrain_call(const MxDirtTsImage *, uintptr_t wrapper, uintptr_t optional_near_relay, MxDirtTsCallPlan *);
 #endif

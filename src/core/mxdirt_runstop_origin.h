@@ -29,18 +29,18 @@ static inline int mxb_runstop_pause_origin(MxbRunStopRead read,void *context,
     if(!read||!r||!r->image_base||r->image_bytes<0x9e4924||
        r->image_bytes>UINT64_MAX-r->image_base||!r->verified_executable_sha256)return MXB_RUNSTOP_INVALID;
     if(strcmp(r->verified_executable_sha256,
-       "9e792d7aed1dc40df11eea51d1a6d0519daec7be2b65609905df8c9de804a291"))return MXB_RUNSTOP_BUILD;
+       "fdde0154af35ea3d6783e67410e68047f057a6375987b394ed43ffdc06e05d5f"))return MXB_RUNSTOP_BUILD;
     uint64_t slot=r->return_slot;
     if(!slot||(slot&7)||!r->stack_low||r->stack_low>=r->stack_high||
        slot<r->stack_low||slot>=r->stack_high||r->stack_high-slot<0x30c)return MXB_RUNSTOP_STACK;
     uint64_t sdk,api,parent;uint32_t command;
     if(read(context,slot,&sdk,sizeof(sdk))!=1)return MXB_RUNSTOP_READ;
-    if(sdk!=r->image_base+0x12ac53)return MXB_RUNSTOP_CALLER;
+    if(sdk!=r->image_base+0x12abf3)return MXB_RUNSTOP_CALLER;
     if(read(context,slot+0x30,&api,sizeof(api))!=1)return MXB_RUNSTOP_READ;
-    if(api!=r->image_base+0x127e40)return MXB_RUNSTOP_CALLER;
+    if(api!=r->image_base+0x127dd6)return MXB_RUNSTOP_CALLER;
     if(read(context,slot+0x300,&parent,sizeof(parent))!=1||
        read(context,slot+0x308,&command,sizeof(command))!=1)return MXB_RUNSTOP_READ;
-    if(parent!=r->image_base+0xf23ca||command!=0x3b4)return MXB_RUNSTOP_CALLER;
+    if(parent!=r->image_base+0xf230a||command!=0x3b5)return MXB_RUNSTOP_CALLER;
     unsigned char bytes[512];
     for(size_t j=0;j<sizeof(mxb_runstop_code_spans)/sizeof(*mxb_runstop_code_spans);j++){
         const MxbRunStopCodeSpan *p=&mxb_runstop_code_spans[j];
@@ -55,7 +55,7 @@ static inline int mxb_runstop_pause_origin(MxbRunStopRead read,void *context,
        read(context,r->image_base+0x3d7fac,&paused,sizeof(paused))!=1||
        read(context,r->image_base+0x9d7aa4,&host,sizeof(host))!=1||
        read(context,r->image_base+0x9e4920,&mode,sizeof(mode))!=1)return MXB_RUNSTOP_READ;
-    if(api_pointer!=r->image_base+0x120cc0)return MXB_RUNSTOP_BUILD;
+    if(api_pointer!=r->image_base+0x120c40)return MXB_RUNSTOP_BUILD;
     return paused==1&&host&&mode==1?MXB_RUNSTOP_ORDINARY_PAUSE:MXB_RUNSTOP_RUNNING;
 }
 #endif

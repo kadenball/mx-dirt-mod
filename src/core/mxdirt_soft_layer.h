@@ -28,6 +28,23 @@
 #define MXD_SOFT_TILE 32
 #define MXD_SOFT_UNIT .001f /* 1 mm steps: +-127 mm */
 #define MXD_SOFT_MAX_TILES 64000u /* 2 KB each: ~130 MB at most */
+/* How the top layer behaves on a chosen surface (factors on the track-default behaviour).
+   thick: layer depth (replaces the material factor); press: extra sink of the tread; width: trench width;
+   lipw/liph: width and height of the pushed-up lips; repose: wall steepness; crumble: chance a wall piece
+   falls in (added); kc: share of pressed soil that packs instead of moving; roost: thrown crumbs; weave:
+   tyre wander; smear: braking smear; level: ironing on packed lines (added); knob: moisture below which
+   no knob pits stay; age: how fast fresh soil settles. */
+typedef struct {float thick,press,width,lipw,liph,repose,crumble,kc,roost,weave,smear,level,knob,age;} MxdSoftSurf;
+static inline MxdSoftSurf mxd_soft_surf(int surface){
+    static const MxdSoftSurf t[5]={
+     /*        thick press width lipw liph repose crumble kc   roost weave smear level knob  age */
+     /* track */{1.f, 0.f,  1.f,  1.f, 1.f, 1.f,   0.f,   -1.f,1.f,  1.f,  1.f,  0.f,  .12f, 1.f},
+     /* loam  */{1.5f,.05f, 1.05f,1.15f,1.4f,1.15f, .06f,  .40f,1.4f, 1.f,  1.f,  0.f,  .08f, .8f},
+     /* hard  */{.4f, -.2f, .92f, .6f, .45f,1.f,  -.12f,  .80f,.45f, .55f, .6f,  .35f, .25f, 1.8f},
+     /* sand  */{1.9f,.08f, 1.3f, 1.7f, .4f, .72f,  .40f,  .10f,2.f,  1.7f, 1.3f, 0.f,  .45f, .9f},
+     /* mud   */{1.6f,.12f, 1.12f,.75f,1.9f,1.55f, -.15f,  .25f,1.6f, 1.25f,1.8f, 0.f,  .05f, .3f}};
+    return t[surface>=1&&surface<=4?surface:0];
+}
 typedef struct {
     float cell,span_x,span_z,thickness;
     uint32_t tiles_x,tiles_z,allocated,refused,rng,serial;
@@ -36,6 +53,7 @@ typedef struct {
     float last_x[2],last_z[2];int has_last[2]; /* per wheel: where its last pass ended (local m) */
     int defer_relax; /* 1: passes skip their own slump (pre-wear), mxd_soft_relax_all settles everything after */
     float run[2];    /* per wheel: metres rolled, the coordinate of the trench's width/depth wander */
+    int surface;     /* the chosen surface of the last pass (mxd_soft_surf): sets the settling slope of mxd_soft_relax_all */
     uint8_t *tile_fresh;uint32_t sweep;float age_acc; /* per tile: may hold soil with freshness > 0; the ageing sweep's position */
 } MxdSoft;
 static inline void mxd_soft_destroy(MxdSoft *s){
@@ -88,6 +106,13 @@ static inline void mxd_soft_age(MxdSoft *s,uint32_t count){
         if(changed){if(!bumped){s->serial++;if(!s->serial)s->serial=1;bumped=1;}s->tile_serial[ti]=s->serial;}
     }
 }
+/* Back to an untouched layer in place (a reset track): tiles stay allocated - the look plugin may be reading
+   them - and are written neutral with a new serial so it uploads them again. */
+static inline void mxd_soft_clear(MxdSoft *s){
+    if(!s)return;s->serial++;if(!s->serial)s->serial=1;const size_t n=(size_t)s->tiles_x*s->tiles_z;
+    for(size_t t=0;t<n;t++){uint8_t *p=s->tile[t];if(p){for(int i=0;i<MXD_SOFT_TILE*MXD_SOFT_TILE;i++){p[2*i]=128;p[2*i+1]=0;}s->tile_serial[t]=s->serial;}s->tile_fresh[t]=0;}
+    s->stamps=0;s->loaded=0;s->has_last[0]=s->has_last[1]=0;s->run[0]=s->run[1]=0.f;s->age_acc=0.f;s->defer_relax=0;
+}
 /* Texel for reading only (NULL = untouched / outside). */
 static inline const uint8_t *mxd_soft_peek(const MxdSoft *s,int a,int b){
     if(a<0||b<0)return NULL;uint32_t tx=(uint32_t)a/MXD_SOFT_TILE,tz=(uint32_t)b/MXD_SOFT_TILE;
@@ -107,7 +132,7 @@ static inline void mxd_soft_relax(MxdSoft *s,int a0,int b0,int a1,int b1,int max
 }
 /* Settles every allocated tile (after pre-wear); moisture sets the repose angle. */
 static inline void mxd_soft_relax_all(MxdSoft *s,float moisture,int sweeps){
-    if(!s)return;const float repose=.67f+.52f*fminf(1.f,fmaxf(0.f,(moisture-.15f)/.4f));const int maxd=(int)lrintf(repose*s->cell/MXD_SOFT_UNIT);
+    if(!s)return;const float repose=(.67f+.52f*fminf(1.f,fmaxf(0.f,(moisture-.15f)/.4f)))*mxd_soft_surf(s->surface).repose;const int maxd=(int)lrintf(repose*s->cell/MXD_SOFT_UNIT);
     for(int k=0;k<sweeps;k++)for(uint32_t tz=0;tz<s->tiles_z;tz++)for(uint32_t tx=0;tx<s->tiles_x;tx++)if(s->tile[(size_t)tz*s->tiles_x+tx])
         mxd_soft_relax(s,(int)(tx*MXD_SOFT_TILE),(int)(tz*MXD_SOFT_TILE),(int)(tx*MXD_SOFT_TILE+MXD_SOFT_TILE-1),(int)(tz*MXD_SOFT_TILE+MXD_SOFT_TILE-1),maxd);
 }
@@ -129,6 +154,7 @@ typedef struct {
     float thick;    /* factor on the layer depth here: firmness, packed lines (<1), loose soil piles (>1) */
     float moisture; /* 0 dry .. .35 ideal .. 1 wet: damp soil holds crisp prints and tall narrow lips, dry crumbles */
     float packed;   /* 0..1 how ridden-in the ground is: tyres iron the layer flat on packed lines */
+    int surface;    /* [soil] surface: 0 by the wheel's material, 1 loam, 2 hardpack, 3 sand, 4 mud (MxdSoftSurf) */
 } MxdSoftSoil;
 /* Smooth noise -1..1 along a line (value noise, one knot per unit of x). */
 static inline float mxd_soft_wander(float x,uint32_t seed){
@@ -147,33 +173,34 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
     s->last_x[wi]=px;s->last_z[wi]=pz;s->has_last[wi]=1;
     const float f0=g0,f1=g1,n0=-f1,n1=f0;
     /* sand lies deep and loose, hard-pack and gravel carry only a thin skin */
-    const float mf=material==5?1.8f:material==10?1.25f:material==11?.55f:material==12?.3f:1.f;
+    const int sfc=soil&&soil->surface>=1&&soil->surface<=4&&material!=12?soil->surface:0;const MxdSoftSurf sv=mxd_soft_surf(sfc);s->surface=sfc;
+    const float mf=sfc?sv.thick:material==5?1.8f:material==10?1.25f:material==11?.55f:material==12?.3f:1.f;
     const float sf=soil&&isfinite(soil->thick)?fminf(1.6f,fmaxf(.3f,soil->thick)):1.f,mo=soil&&isfinite(soil->moisture)?fminf(1.f,fmaxf(0.f,soil->moisture)):.35f;
     const float pk=soil&&isfinite(soil->packed)?fminf(1.f,fmaxf(0.f,soil->packed)):0.f,md=fmaxf(-1.f,fminf(1.f,(mo-.35f)/.3f));
     const float T=fminf(.10f,s->thickness*mf*sf);
-    const float len=seg>=0.f?seg:fminf(1.f,fmaxf(0.f,v)*dt),hw=rear?.075f:.058f,patch=.05f,st=s->cell*.7f;
+    const float len=seg>=0.f?seg:fminf(1.f,fmaxf(0.f,v)*dt),hw=(rear?.075f:.058f)*sv.width,patch=.05f,st=s->cell*.7f;
     /* damp: tall narrow lips; dry: low wide crumbly ones */
-    const float lipw=.06f-.015f*md,lip_peak=.015f-.006f*md,level=.5f*pk;
+    const float lipw=(.06f-.015f*md)*sv.lipw,lip_peak=(.015f-.006f*md)*sv.lipw,level=fminf(1.f,(.5f+sv.level)*pk);
     /* angle of repose: dry loose soil ~34 deg, damp holds ~50 deg */
-    const float repose=.67f+.52f*fminf(1.f,fmaxf(0.f,(mo-.15f)/.4f));
+    const float repose=(.67f+.52f*fminf(1.f,fmaxf(0.f,(mo-.15f)/.4f)))*sv.repose;
     spin=fminf(1.f,fmaxf(0.f,isfinite(spin)?spin:0.f));skid=fminf(1.f,fmaxf(0.f,isfinite(skid)?skid:0.f));if(!isfinite(slip_lat))slip_lat=0.f;
     /* the tread presses the layer down by its load; a spinning tyre digs through it */
-    float press=fminf(.88f,fmaxf(.45f,.45f+.30f*load/1200.f));if(spin>.15f)press=fmaxf(press,.75f+.25f*spin);
-    const float floor_u=-T*press/MXD_SOFT_UNIT;const int cap=(int)fminf(127.f,T*(1.3f+.3f*md)/MXD_SOFT_UNIT);
+    float press=fminf(.88f,fmaxf(.45f,.45f+.30f*load/1200.f));if(spin>.15f)press=fmaxf(press,.75f+.25f*spin);press=fminf(.95f,fmaxf(.3f,press+sv.press));
+    const float floor_u=-T*press/MXD_SOFT_UNIT;const int cap=(int)fminf(127.f,T*(1.3f+.3f*md)*sv.liph/MXD_SOFT_UNIT);
     const uint8_t dir=(uint8_t)((int)lrintf(atan2f(f1,f0)/3.14159265f*32.f)&31);
-    const int knobs=fresh&&mo>.12f&&spin<.15f&&skid<.3f&&fabsf(slip_lat)<1.5f; /* bone-dry dust keeps no knob pits */const uint8_t tag=(uint8_t)((knobs?0x80:0)|(s->defer_relax?0:0x60)|dir);
+    const int knobs=fresh&&mo>sv.knob&&spin<.15f&&skid<.3f&&fabsf(slip_lat)<1.5f; /* bone-dry dust keeps no knob pits */const uint8_t tag=(uint8_t)((knobs?0x80:0)|(s->defer_relax?0:0x60)|dir);
     /* share of the pushed soil going to the +n side: a sideways slide bulldozes it */
     float ln=0.f;if(lat){float ll=hypotf(lat[0],lat[1]);if(ll>1e-4f)ln=(lat[0]*n0+lat[1]*n1)/ll;}
     const float wr=.5f+.4f*fmaxf(-1.f,fminf(1.f,slip_lat*ln/2.f));
-    const float kc=(material==5?.25f:.5f)+.15f*fmaxf(0.f,md); /* pressed soil that packs instead of moving (mud packs more) */
-    const float roost=spin>.15f?fminf(.8f,1.2f*spin):0.f,push=skid>.15f?fminf(.6f,skid):0.f;
+    const float kc=(sv.kc>=0.f?sv.kc:material==5?.25f:.5f)+.15f*fmaxf(0.f,md); /* pressed soil that packs instead of moving (mud packs more) */
+    const float roost=spin>.15f?fminf(.9f,1.2f*spin*sv.roost):0.f,push=skid>.15f?fminf(.6f,skid):0.f;
     const float slide=fminf(8.f,fabsf(slip_lat)),fast=fminf(1.f,fmaxf(0.f,(v-4.f)/10.f));
     /* the tyre weaves and squirms: the trench centre wanders a few cm (more under wheelspin or in a slide) */
-    const float weave=(rear?.014f:.022f)+.022f*fminf(1.f,2.f*spin)+.012f*fminf(1.f,slide);
+    const float weave=((rear?.014f:.022f)+.022f*fminf(1.f,2.f*spin)+.012f*fminf(1.f,slide))*sv.weave;
     s->serial++;if(!s->serial)s->serial=1;s->stamps++;
     /* fresh soil dries over a few laps: the ageing sweep crosses the whole grid in ~30 s of riding (dt is
        per wheel, two wheels a bike), a freshness level lasts ~3 sweeps, three levels ~4-5 minutes */
-    if(!s->defer_relax){s->age_acc+=(float)s->tiles_x*(float)s->tiles_z*fminf(.1f,fmaxf(0.f,dt))/60.f;uint32_t na_=(uint32_t)s->age_acc;s->age_acc-=(float)na_;if(na_)mxd_soft_age(s,na_>20000u?20000u:na_);}
+    if(!s->defer_relax){s->age_acc+=(float)s->tiles_x*(float)s->tiles_z*fminf(.1f,fmaxf(0.f,dt))*sv.age/60.f;uint32_t na_=(uint32_t)s->age_acc;s->age_acc-=(float)na_;if(na_)mxd_soft_age(s,na_>20000u?20000u:na_);}
     /* trench walls stand at the repose angle, centred on the tread edge (no vertical texel steps) */
     const float wall=fmaxf(1.5f*s->cell,T*press/repose),ho=hw+.5f*wall,ha=ho+.5f*s->cell;
     const int na=(int)ceilf(2.f*ha/st),nl=(int)ceilf(lipw/st);float lw[16],lsum=0.f;
@@ -189,7 +216,7 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
         const float cx=px+f0*u+n0*off,cz=pz+f1*u+n1*off;
         /* a spinning rear tyre paddles: it bites and lets go, scooping the floor every ~17 cm (unevenly: it hooks up and breaks loose); a locked or
            dragging tyre smears a wider, shallower, streaked groove instead of rolling a clean one */
-        const float scoop=rear&&spin>.12f?.3f*fminf(1.f,(spin-.12f)/.4f)*(.65f+.35f*mxd_soft_wander(rr/.47f,0x7f4a7c15u))*cosf(6.2831853f*(rr/.17f+.4f*mxd_soft_wander(rr/.6f,0x2c1b3c6du))):0.f,smear=skid>.2f?fminf(1.f,(skid-.2f)/.5f):0.f;
+        const float scoop=rear&&spin>.12f?.3f*fminf(1.f,(spin-.12f)/.4f)*(.65f+.35f*mxd_soft_wander(rr/.47f,0x7f4a7c15u))*cosf(6.2831853f*(rr/.17f+.4f*mxd_soft_wander(rr/.6f,0x2c1b3c6du))):0.f,smear=skid>.2f?fminf(1.f,(skid-.2f)/.5f*sv.smear):0.f;
         const float hoq=(ho+.014f*wob)*(1.f+.2f*smear),hwq=(hw+.014f*wob)*(1.f+.2f*smear),digq=dig*(1.f+scoop)*(1.f-.3f*smear);
         for(int k=0;k<na;k++){
             /* the profile is taken at the texel's own centre, not the sample, so edges stay clean */
@@ -212,7 +239,7 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
             mxd_soft_add(s,cx+n0*a,cz+n1*a,L*wr*w,cap);mxd_soft_add(s,cx-n0*a,cz-n1*a,L*(1.f-wr)*w,cap);}
         /* the walls break: here and there a piece of the lip falls back into the trench - the groove is
            torn, not ruled */
-        if(mxd_soft_rand(s)<.22f+.2f*fmaxf(0.f,-md)){float sd=mxd_soft_rand(s)<.5f?1.f:-1.f,qq=5.f+14.f*mxd_soft_rand(s);
+        if(mxd_soft_rand(s)<.22f+.2f*fmaxf(0.f,-md)+sv.crumble){float sd=mxd_soft_rand(s)<.5f?1.f:-1.f,qq=5.f+14.f*mxd_soft_rand(s);
             uint8_t *lp=mxd_soft_at(s,(int)floorf((cx+n0*sd*(hoq+lip_peak))/s->cell),(int)floorf((cz+n1*sd*(hoq+lip_peak))/s->cell));
             if(lp){int h=(int)lp[0]-128;if((float)h>qq*.5f){lp[0]=(uint8_t)(h-(int)(qq*.5f)+128);
                 float ain=hoq-.02f-.05f*mxd_soft_rand(s);uint8_t *tp=mxd_soft_at(s,(int)floorf((cx+n0*sd*ain)/s->cell),(int)floorf((cz+n1*sd*ain)/s->cell));
@@ -229,7 +256,7 @@ static inline void mxd_soft_stamp(MxdSoft *s,int rear,float X,float Z,const floa
          (int)lrintf(repose*s->cell/MXD_SOFT_UNIT));}
     /* drive spin: crumbs thrown back over the ground behind the tyre */
     for(int c=0;c<32&&roost_u>2.f;c++){
-        float q=4.f+8.f*mxd_soft_rand(s);if(q>roost_u)q=roost_u;roost_u-=q; /* 4..12 mm crumbs */
+        float q=(4.f+8.f*mxd_soft_rand(s))*(sfc==4?1.6f:sfc==3?.6f:1.f);if(q>roost_u)q=roost_u;roost_u-=q; /* 4..12 mm crumbs: mud throws clumps, sand fine grains */
         float u=-(len+patch)-(.15f+1.1f*mxd_soft_rand(s))*fminf(1.f,.3f+v/8.f),a=(mxd_soft_rand(s)-.5f)*.35f;
         float x=px+f0*u+n0*a,z=pz+f1*u+n1*a;
         mxd_soft_add(s,x,z,q*.5f,cap);

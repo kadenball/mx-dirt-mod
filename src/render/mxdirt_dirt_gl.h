@@ -3,7 +3,7 @@
 #include "mxdirt_dirt.h"
 #include "mxdirt_camera.h"
 typedef struct MxDirtGl MxDirtGl;
-typedef struct {float strength,base_loose,fade_start,fade_end,relief,lift;} MxDirtLook; /* relief: depth shading 0..2 (0 = off); lift: untouched soft layer height 0..1 */
+typedef struct {float strength,base_loose,fade_start,fade_end,relief,lift;int surface;} MxDirtLook; /* relief: depth shading 0..2 (0 = off); lift: untouched soft layer height 0..1; surface: [soil] surface 0..4 */
 /* Dirt Material GL owner. GL 4.x compatibility context only, bound to the
    creating context/thread; generation fixed until destroy. Private objects:
    one static (MXDIRT_CELLS+1)^2 grid mesh (VBO+IBO+VAO), RG16 window heights, RGBA8
@@ -27,6 +27,8 @@ typedef struct {
  const uint8_t *const *tile;const uint32_t *serial;uint32_t tiles_x,tiles_z,side;
  float cell,thickness,unit,origin_x,origin_z; /* unit: m per height step; origin: world x,z of grid vertex (0,0) */
  int solid,sink; /* solid: the ground texture follows the relief; sink: also write the raised layer's depth (the bike sinks into it) */
+ int mesh;float mesh_r; /* mesh: the layer as real 3D geometry within mesh_r m of the camera (replaces sink there) */
+ uint32_t tyre_mask;float tyre[2][8]; /* live tyres (mxdirt_frame.h ABI 4): the layer moves around them; 0 = none */
 } MxDirtSoftInput;
 int mxdirt_gl_draw(MxDirtGl *,const MxDirtCameraScope *,const MxDirtWindow *,const MxDirtLook *,const MxDirtState *state,const MxDirtSoftInput *soft);
 /* The draw target seen at the last full state check (FBO name, its sample count)

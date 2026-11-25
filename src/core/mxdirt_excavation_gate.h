@@ -29,11 +29,11 @@ typedef struct {
 static inline int mxb_excavation_call_plan(uintptr_t base,uintptr_t relay,
     int verified_executable,const unsigned char call[5],
     const unsigned char wrapper[12],MxbExcavationCallPlan *out) {
-    static const unsigned char cs[5]={0xe8,0x0c,0x70,0x01,0};
-    static const unsigned char ws[12]={0x48,0x81,0xc1,0xe8,0x0c,0,0,0xe9,0x14,0x9d,3,0};
+    static const unsigned char cs[5]={0xe8,0x6c,0x6f,0x01,0};
+    static const unsigned char ws[12]={0x48,0x81,0xc1,0xe8,0x0c,0,0,0xe9,0x54,0x9f,3,0};
     if(!base||!relay||!out||!call||!wrapper||!verified_executable||
        base>UINTPTR_MAX-0x1bbda0||memcmp(call,cs,5)||memcmp(wrapper,ws,12))return 0;
-    uintptr_t site=base+0x1a4d8f,from=site+5;int64_t distance;
+    uintptr_t site=base+0x1a4e2f,from=site+5;int64_t distance;
     if(relay>=from){if(relay-from>INT32_MAX)return 0;distance=(int64_t)(relay-from);}
     else {if(from-relay>(uint64_t)INT32_MAX+1)return 0;distance=-(int64_t)(from-relay);}
     MxbExcavationCallPlan p;memset(&p,0,sizeof(p));p.site=site;

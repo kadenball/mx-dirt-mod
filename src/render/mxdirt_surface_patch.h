@@ -10,8 +10,8 @@
    Heights (26034e) are untouched. [renderer] raised_dirt_surface=0 disables. */
 #include <stdint.h>
 #include <string.h>
-#define MXDIRT_SURFACE_SITE 0x260355u
-#define MXDIRT_SURFACE_RETURN 0x26035bu
+#define MXDIRT_SURFACE_SITE 0x260595u
+#define MXDIRT_SURFACE_RETURN 0x26059bu
 #define MXDIRT_SURFACE_RELAY_BYTES 18u
 static const unsigned char mxdirt_surface_original[5]={0x8b,0xc1,0xf3,0x0f,0x5e};
 static const unsigned char mxdirt_surface_body[13]={0x0f,0xbf,0xc1,0x85,0xc0,0x79,0x02,0x31,0xc0,0xf3,0x0f,0x5e,0xe0};

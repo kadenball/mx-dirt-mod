@@ -78,7 +78,7 @@ static const unsigned char outer_guard[]={
 static const unsigned char terrain_guard[]={
  0x48,0x8b,0xc4,0x48,0x89,0x58,0x18,0x56,0x57,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0xc0,1,0,0};
 static const unsigned char terrain_call[5]={0xe8,8,0x1c,1,0};
-enum { OUTER_GUARD=0x24f5e1u, TERRAIN_FUNCTION=0x261220u };
+enum { OUTER_GUARD=0x24f821u, TERRAIN_FUNCTION=0x261460u };
 static int image_match(const MxDirtTsImage *v,uint32_t off,const void *expected,size_t n){
     unsigned char got[80];
     return n<=sizeof(got)&&off<=v->image_bytes&&n<=v->image_bytes-off&&
